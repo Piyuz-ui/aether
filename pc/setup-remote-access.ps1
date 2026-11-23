@@ -54,7 +54,7 @@ $ts = Find-Tailscale
 if (-not $ts) {
     Say "Tailscale isn't installed. It's free for personal use: https://tailscale.com"
     if ((Get-Command winget -ErrorAction SilentlyContinue) -and (Ask "Install Tailscale now with winget?")) {
-        winget install --id tailscale.tailscale -e --accept-source-agreements --accept-package-agreements
+        winget install --id Tailscale.Tailscale -e --source winget --accept-source-agreements --accept-package-agreements
         $ts = Find-Tailscale
     }
     if (-not $ts) { Warn "Install it from https://tailscale.com/download/windows, then run this script again."; exit 1 }

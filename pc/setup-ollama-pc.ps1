@@ -43,7 +43,7 @@ $ollama = Get-Command ollama -ErrorAction SilentlyContinue
 if (-not $ollama) {
     Warn "Ollama isn't installed."
     if ((Get-Command winget -ErrorAction SilentlyContinue) -and (Ask "Install it now with winget?")) {
-        winget install --id Ollama.Ollama -e --accept-source-agreements
+        winget install --id Ollama.Ollama -e --source winget --accept-source-agreements --accept-package-agreements
         $env:Path = [Environment]::GetEnvironmentVariable("Path", "Machine") + ";" + [Environment]::GetEnvironmentVariable("Path", "User")
         $ollama = Get-Command ollama -ErrorAction SilentlyContinue
     }
