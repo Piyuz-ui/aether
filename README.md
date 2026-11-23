@@ -14,6 +14,7 @@
 ![Voice](https://img.shields.io/badge/Voice-Kokoro--82M-5EEAD4)
 ![Tests](https://img.shields.io/badge/tests-148%20passing-5EEAD4)
 ![Privacy](https://img.shields.io/badge/data-never%20leaves%20your%20machine-0E2442)
+[![License: MIT](https://img.shields.io/badge/license-MIT-F0F9FF)](LICENSE)
 
 <!-- Record per docs/DEMO_SCRIPT.md → shot list, then save as docs/media/hero.gif -->
 ![AETHER demo: the living orb, a live tool trace and the safety gate](docs/media/hero.gif)
@@ -127,7 +128,7 @@ ollama pull qwen3.5:4b          # optional: vision + tools (screenshots)
 ```
 
 ```bash
-git clone <your-repo-url> aether && cd aether
+git clone https://github.com/Piyuz-ui/aether.git && cd aether
 ./start.sh
 ```
 
@@ -214,3 +215,7 @@ The repository also contains **Atlas** (`agent/`, `interfaces/`, `main.py`), the
 ## Built with
 
 [Ollama](https://ollama.com) · [Qwen](https://github.com/QwenLM) · [nomic-embed-text](https://www.nomic.ai) · [Kokoro-82M](https://huggingface.co/hexgrad/Kokoro-82M) via [kokoro-onnx](https://github.com/thewh1teagle/kokoro-onnx) · [FastAPI](https://fastapi.tiangolo.com) · [sqlite-vec](https://github.com/asg017/sqlite-vec) · [Next.js](https://nextjs.org) · [Framer Motion](https://motion.dev) · [Tailwind CSS](https://tailwindcss.com) · [Model Context Protocol](https://modelcontextprotocol.io)
+
+## License
+
+[MIT](LICENSE) © 2026 Piyush Agrawal

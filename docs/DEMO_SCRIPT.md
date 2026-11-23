@@ -31,7 +31,7 @@
 | **0:46–0:58** | Type **"Delete that note."** The **safety modal** springs in (amber wave, "can't be undone"). Pause for a beat, then click **Approve**. | *"Anything risky pauses the agent and asks me first. The loop literally waits until I decide."* |
 | **0:58–1:10** | Back on the reply: auto-speak is talking. **Zoom in on the orb** as it swells and glows with the voice. | *"And it talks back with a neural voice that's also generated locally. The orb is reacting to the actual audio."* |
 | **1:10–1:20** | Expand the **telemetry chip** under a reply (steps, tool chain, tokens, context bar, *local*). Quick flash of the Memory Bank with learned facts. | *"Every answer shows exactly what it did, how long it took, and what it learned about me."* |
-| **1:20–1:30** | Hold on the empty state, orb centred. Title card: **AETHER · local-first autonomous agent · github.com/…** | *"AETHER: tools, memory, vision, voice and safety, running on my own machine."* |
+| **1:20–1:30** | Hold on the empty state, orb centred. Title card: **AETHER · local-first autonomous agent · github.com/Piyuz-ui/aether** | *"AETHER: tools, memory, vision, voice and safety, running on my own machine."* |
 
 **Total:** about 88 seconds. If you're short on time, cut the research scene (0:34–0:46), since the delete scene can reuse the note from the quiz or vision scenes.
 
