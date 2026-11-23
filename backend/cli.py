@@ -28,6 +28,7 @@ from rich.theme import Theme
 from aether import __version__
 from aether.config import get_settings
 from aether.engine import AetherAgent, Session
+from aether.llm.cloud import split_model
 from aether.llm.router import router_from_settings
 from aether.mcp import MCPManager
 from aether.memory import MemorySystem
@@ -306,8 +307,7 @@ class CLI:
                         models += [m["id"] for m in p["models"]]
                 for m in models:
                     mark = "◉" if m == self.agent.model else "○"
-                    cloud = "  [cloud]" if ":" in m and m.split(":", 1)[0] in {
-                        "gemini", "groq", "openrouter", "claude"} else ""
+                    cloud = "  [cloud]" if split_model(m)[0] else ""
                     console.print(Text(f" {mark} {m}{cloud}", style="glacier" if mark == "◉" else "mist"))
         elif cmd == "mcp":
             if arg == "reload":

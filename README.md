@@ -12,7 +12,7 @@
 ![Ollama](https://img.shields.io/badge/LLM-Ollama%20(local)-7DD3FC)
 ![MCP](https://img.shields.io/badge/MCP-client-A5B4FC)
 ![Voice](https://img.shields.io/badge/Voice-Kokoro--82M-5EEAD4)
-![Tests](https://img.shields.io/badge/tests-166%20passing-5EEAD4)
+![Tests](https://img.shields.io/badge/tests-179%20passing-5EEAD4)
 ![Privacy](https://img.shields.io/badge/data-local%20by%20default-0E2442)
 [![License: MIT](https://img.shields.io/badge/license-MIT-F0F9FF)](LICENSE)
 
@@ -32,7 +32,7 @@ A chatbot answers. **AETHER works.** Give it a goal and it runs an explicit **Re
 >
 > ⚡ `4 steps · add_class → add_class → add_class · 12.8s · local`
 
-It does this with **no cloud API**: a local model through [Ollama](https://ollama.com), and a local SQLite memory, vector search and neural voice. When you want more power, you can opt in to a **cloud brain** (Gemini, Groq or OpenRouter on their free tiers, or Claude) per conversation. The UI marks it clearly, and memory, documents and voice stay local.
+It does this with **no cloud API**: a local model through [Ollama](https://ollama.com), and a local SQLite memory, vector search and neural voice. When you want more power, you can opt in to a **cloud brain**: 11 providers, 7 of them with free tiers (Gemini, Groq, OpenRouter, Mistral, Cerebras, GitHub Models, Hugging Face) plus Claude, OpenAI, DeepSeek and Grok. The UI marks it clearly, and memory, documents and voice stay local.
 
 ## Highlights
 
@@ -158,14 +158,21 @@ cd backend && python -m pytest -q
 
 Local models are always the default. To add a cloud model, open **Settings → Cloud brains**, paste a key and press **Connect**. AETHER checks the key with the provider, then saves it to `backend/.env` (gitignored, readable only by you). You can also put the key in `backend/.env` yourself:
 
-| Provider | Free tier | Key | Model names |
+| Provider | Free tier | Key (in `backend/.env`) | Model names |
 |---|---|---|---|
 | Google Gemini | yes | `GEMINI_API_KEY` from [AI Studio](https://aistudio.google.com/apikey) | `gemini:gemini-2.5-flash`, … |
 | Groq | yes | `GROQ_API_KEY` from [console.groq.com](https://console.groq.com/keys) | `groq:llama-3.3-70b-versatile`, … |
 | OpenRouter | yes (`:free` models) | `OPENROUTER_API_KEY` from [openrouter.ai](https://openrouter.ai/keys) | `openrouter:<model>:free` |
+| Mistral AI | yes ("Experiment" plan) | `MISTRAL_API_KEY` from [console.mistral.ai](https://console.mistral.ai/api-keys) | `mistral:mistral-medium-latest`, … |
+| Cerebras | yes | `CEREBRAS_API_KEY` from [cloud.cerebras.ai](https://cloud.cerebras.ai) | `cerebras:gpt-oss-120b`, … |
+| GitHub Models | yes (daily limits) | `GITHUB_MODELS_TOKEN`: a [GitHub token](https://github.com/settings/personal-access-tokens) with `models:read` | `github:openai/gpt-4.1`, … |
+| Hugging Face | small monthly credit | `HF_TOKEN` from [huggingface.co](https://huggingface.co/settings/tokens) | `huggingface:<org>/<model>` |
 | Anthropic Claude | no (paid) | `ANTHROPIC_API_KEY` from [the Claude Console](https://platform.claude.com/settings/keys) | `claude:claude-opus-5-5`, `claude:claude-sonnet-5-5`, `claude:claude-haiku-5-5` |
+| OpenAI | no (paid) | `OPENAI_API_KEY` from [platform.openai.com](https://platform.openai.com/api-keys) | `openai:gpt-5`, … |
+| DeepSeek | no (paid, cheap) | `DEEPSEEK_API_KEY` from [platform.deepseek.com](https://platform.deepseek.com/api_keys) | `deepseek:deepseek-chat`, … |
+| xAI Grok | no (paid) | `XAI_API_KEY` from [console.x.ai](https://console.x.ai) | `xai:grok-4`, … |
 
-Connected providers appear in the header's model menu, under the local models. Each provider's live model list is used when it can be fetched. While a cloud model is selected, your messages go to that provider, along with any memories and document passages AETHER adds to the prompt. Embeddings, the knowledge vault, memory storage and voice never leave your machine. Gemini, Groq and OpenRouter use their OpenAI-compatible APIs. Claude uses the official Anthropic SDK with refusal fallbacks turned on.
+Connected providers appear in the header's model menu, under the local models. Each provider's live model list is used when it can be fetched. While a cloud model is selected, your messages go to that provider, along with any memories and document passages AETHER adds to the prompt. Embeddings, the knowledge vault, memory storage and voice never leave your machine. Every provider except Claude is used through its OpenAI-compatible API, and only models that can call tools are listed. Claude uses the official Anthropic SDK with refusal fallbacks turned on. AETHER adapts to each provider's quirks on its own. For example, it learns which settings a model refuses and stops sending them, and it uses the tool-call id format Mistral requires.
 </details>
 
 <details>

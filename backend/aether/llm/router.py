@@ -1,7 +1,7 @@
 """One model backend for the engine: local Ollama models plus optional cloud providers.
 
 Model names choose the backend. "qwen2.5:7b" runs on Ollama; "gemini:gemini-2.5-flash",
-"groq:…", "openrouter:…" and "claude:…" run in the cloud. The router has the same methods as
+"claude:…", "mistral:…" and the other provider prefixes in cloud.PROVIDERS run in the cloud. The router has the same methods as
 OllamaClient, so nothing else in AETHER needs to know the difference. Embeddings (the
 knowledge vault and memory) always stay on Ollama, on this machine.
 """
@@ -15,11 +15,6 @@ from typing import Any
 from .cloud import (PROVIDERS, ClaudeProvider, OpenAICompatProvider, split_model)
 from .ollama import ChatDelta, OllamaClient, OllamaError
 
-BASE_URLS = {
-    "gemini": "https://generativelanguage.googleapis.com/v1beta/openai",
-    "groq": "https://api.groq.com/openai/v1",
-    "openrouter": "https://openrouter.ai/api/v1",
-}
 
 
 class ModelRouter:
@@ -42,7 +37,7 @@ class ModelRouter:
         if pid == "claude":
             return ClaudeProvider(key, max_output_tokens=claude_cap, timeout_s=timeout_s,
                                   client=self._claude_client)
-        return OpenAICompatProvider(pid, BASE_URLS[pid], key, max_output_tokens=out_cap,
+        return OpenAICompatProvider(pid, PROVIDERS[pid].base_url, key, max_output_tokens=out_cap,
                                     timeout_s=timeout_s, transport=self._transport)
 
     async def set_key(self, pid: str, key: str | None, *, verify: bool = True) -> None:

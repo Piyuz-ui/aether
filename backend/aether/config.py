@@ -44,15 +44,26 @@ class Settings(BaseSettings):
     gemini_api_key: SecretStr = _key("GEMINI_API_KEY", "GOOGLE_API_KEY")
     groq_api_key: SecretStr = _key("GROQ_API_KEY")
     openrouter_api_key: SecretStr = _key("OPENROUTER_API_KEY")
+    mistral_api_key: SecretStr = _key("MISTRAL_API_KEY")
+    cerebras_api_key: SecretStr = _key("CEREBRAS_API_KEY")
+    github_models_token: SecretStr = _key("GITHUB_MODELS_TOKEN")
+    huggingface_api_key: SecretStr = _key("HF_TOKEN", "HUGGINGFACE_API_KEY")
     anthropic_api_key: SecretStr = _key("ANTHROPIC_API_KEY")
-    cloud_max_output_tokens: int = 8192     # Gemini / Groq / OpenRouter, per call
+    openai_api_key: SecretStr = _key("OPENAI_API_KEY")
+    deepseek_api_key: SecretStr = _key("DEEPSEEK_API_KEY")
+    xai_api_key: SecretStr = _key("XAI_API_KEY")
+    cloud_max_output_tokens: int = 8192     # OpenAI-compatible providers, per call
     claude_max_output_tokens: int = 16000   # Claude, per call (includes its thinking)
 
     def cloud_keys(self) -> dict[str, str]:
-        return {"gemini": self.gemini_api_key.get_secret_value(),
-                "groq": self.groq_api_key.get_secret_value(),
-                "openrouter": self.openrouter_api_key.get_secret_value(),
-                "claude": self.anthropic_api_key.get_secret_value()}
+        """Provider id → key ("" when not set). Ids match aether.llm.cloud.PROVIDERS."""
+        fields = {"gemini": self.gemini_api_key, "groq": self.groq_api_key,
+                  "openrouter": self.openrouter_api_key, "mistral": self.mistral_api_key,
+                  "cerebras": self.cerebras_api_key, "github": self.github_models_token,
+                  "huggingface": self.huggingface_api_key, "claude": self.anthropic_api_key,
+                  "openai": self.openai_api_key, "deepseek": self.deepseek_api_key,
+                  "xai": self.xai_api_key}
+        return {pid: key.get_secret_value() for pid, key in fields.items()}
 
     # --- agent loop ----------------------------------------------------------
     max_steps: int = 8

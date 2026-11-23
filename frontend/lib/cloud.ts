@@ -1,6 +1,8 @@
 /** Cloud model names look like "gemini:gemini-2.5-flash"; local Ollama ones like "qwen2.5:7b". */
 export const CLOUD_LABELS: Record<string, string> = {
-  gemini: "Gemini", groq: "Groq", openrouter: "OpenRouter", claude: "Claude",
+  gemini: "Gemini", groq: "Groq", openrouter: "OpenRouter", mistral: "Mistral", cerebras: "Cerebras",
+  github: "GitHub Models", huggingface: "Hugging Face", claude: "Claude", openai: "OpenAI",
+  deepseek: "DeepSeek", xai: "Grok",
 };
 
 /** The provider's short label for a cloud model, or null for a local one. */

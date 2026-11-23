@@ -173,9 +173,22 @@ function CloudSection({ revision, onChanged, toast }: {
           only to <code className="font-mono">backend/.env</code>, which git ignores.
         </p>
         {providers.error && <ErrorNote message={providers.error.message} hint={providers.error.hint} />}
-        {providers.data?.map((p) => (
-          <CloudProviderRow key={p.id} p={p} toast={toast} onChanged={() => { void providers.reload(); onChanged(); }} />
-        ))}
+        {([["Free tiers", true], ["Paid", false]] as const).map(([title, free]) => {
+          const group = providers.data?.filter((p) => p.free === free) ?? [];
+          if (!group.length) return null;
+          // Connected providers first, so what you use is at the top.
+          const sorted = [...group].sort((a, b) => Number(b.configured) - Number(a.configured));
+          return (
+            <div key={title} className="space-y-2">
+              <div className="px-1 pt-1 text-[10.5px] uppercase tracking-[0.14em] text-mist">
+                {title} · {group.filter((p) => p.configured).length}/{group.length} connected
+              </div>
+              {sorted.map((p) => (
+                <CloudProviderRow key={p.id} p={p} toast={toast} onChanged={() => { void providers.reload(); onChanged(); }} />
+              ))}
+            </div>
+          );
+        })}
       </div>
     </section>
   );

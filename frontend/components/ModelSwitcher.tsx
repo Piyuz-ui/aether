@@ -174,7 +174,7 @@ export function ModelSwitcher({ current, disabled, onSwitched, toast, onOpenSett
               {unset.length > 0 && (
                 <button type="button" onClick={() => { setOpen(false); onOpenSettings?.(); }}
                   className="text-left text-glacier underline-offset-2 hover:underline">
-                  + Add a cloud brain ({unset.map((p) => p.label.replace(/^(Google|Anthropic) /, "")).join(", ")})
+                  + Add a cloud brain ({unset.filter((p) => p.free).length} free, {unset.filter((p) => !p.free).length} paid to choose from)
                 </button>
               )}
             </div>
