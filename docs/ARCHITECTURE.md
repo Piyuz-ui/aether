@@ -31,6 +31,8 @@ flowchart TB
         T4["search_knowledge_base · list_documents (RAG)"]
         T5["add_task · manage_tasks · add_class · manage_timetable"]
         T7["remember · recall_memory · forget ⚠"]
+        T8["make_quiz · create_pdf"]
+        T9["MCP servers (stdio)"]
         T6["run_python · run_shell_command · delete_file ⚠"]
     end
 
@@ -153,6 +155,8 @@ ai agent/
 │   │   │   ├── web.py             web_search, read_webpage (blocks private IPs)
 │   │   │   ├── notes.py           write_note, read_file, list_files
 │   │   │   ├── system.py          run_python, run_shell_command, delete_file  ⚠ approval
+│   │   │   ├── documents.py       create_pdf (Markdown → styled PDF)
+│   │   │   ├── study.py           make_quiz
 │   │   │   ├── knowledge.py       search_knowledge_base, list_documents
 │   │   │   ├── planner.py         add_task, manage_tasks, add_class, manage_timetable
 │   │   │   └── memory_tools.py    remember, recall_memory, forget
@@ -163,13 +167,16 @@ ai agent/
 │   │   │   ├── facts.py           long-term facts with near-duplicate merging
 │   │   │   ├── taskbook.py        tasks + timetable, natural-language date parsing
 │   │   │   ├── sessions.py        PersistentSession (short-term memory in SQLite)
+│   │   │   ├── quizzes.py         quizzes + weak-topic tracking
 │   │   │   └── __init__.py        MemorySystem: recall context + auto fact extraction
 │   ├── cli.py                     Rich terminal runner
-│   ├── api.py                     FastAPI: SSE chat, approvals, sessions, memory, tasks, knowledge
+│   │   ├── mcp/                   MCP stdio client + manager (mcp_servers.json)
+│   ├── api.py                     FastAPI: SSE chat, approvals, sessions, memory, tasks, knowledge, voice
+│   ├── tts.py                     Kokoro-82M neural voice
 │   ├── tests/
 │   ├── requirements.txt
 │   └── .env.example
-├── frontend/                      Phase 3: Next.js + Tailwind + Framer Motion
+├── frontend/                      Next.js 16 + Tailwind 4 + Framer Motion (liquid-glass UI)
 └── docs/ARCHITECTURE.md
 ```
 
@@ -210,3 +217,51 @@ Run `python api.py`, then open the interactive docs at `http://127.0.0.1:8000/do
 
 When a client disconnects mid-stream, the run is closed and any pending approval is denied.
 A chat that is still answering returns `409` to a second message.
+
+## 7. Later additions
+
+### Vision routing
+
+```mermaid
+flowchart LR
+    IMG["Image dropped in the chat"] --> RESIZE["Browser downscales to ≤1600 px (JPEG)"]
+    RESIZE --> API["POST /api/chat · images[]"]
+    API --> CAP{"Current model has the<br/>'vision' capability?<br/>(Ollama /api/show)"}
+    CAP -- yes --> RUN["Run normally"]
+    CAP -- no --> PICK["Pick an installed vision+tools model<br/>(AETHER_VISION_MODEL first)"] --> RUN
+    RUN --> TOOLS["Tool calls, e.g. add_class × N"]
+```
+
+Images live only in the current turn's model messages. History stores the text plus an image count, so later turns stay small.
+
+### MCP client
+
+`aether/mcp/client.py` speaks newline-delimited JSON-RPC 2.0 over a server's stdin/stdout: `initialize`, then `notifications/initialized`, paginated `tools/list`, `tools/call`, and answering the server's `ping`. `manager.py` registers each discovered tool as `<server>__<tool>`, using the server's own JSON Schema. Risk comes from the per-server `approval` policy plus the tool's `readOnlyHint` annotation. Servers start in the background at API startup, and the tools are removed again on shutdown.
+
+### Interactive quizzes
+
+`make_quiz` stores a validated quiz and returns its ID. Validation repairs answers given as "B" or as an index, and drops questions whose answer isn't one of the options. The UI renders the quiz as cards and posts each answer to `/api/quizzes/{id}/answer`. A topic with at least 2 attempts and under 60% accuracy becomes a long-term memory fact, and appears in the memory context as a weak topic. An *intent guard* in the engine sends the model back once if it writes a quiz as plain text.
+
+### Neural voice
+
+```mermaid
+sequenceDiagram
+    participant UI as Browser (useNeuralVoice)
+    participant API as POST /api/tts/speak
+    participant K as Kokoro-82M (warm)
+    UI->>UI: reply text → prepareForSpeech → sentences
+    par two requests in flight
+        UI->>API: sentence 1
+        UI->>API: sentence 2
+    end
+    API->>K: synthesise (~6× faster than real time)
+    K-->>UI: WAV
+    UI->>UI: decodeAudioData → schedule at the exact end of the previous clip
+    UI->>UI: AnalyserNode → loudness → orb swell and halo
+```
+
+Clips are scheduled on the `AudioContext` clock (`start(at)`, where `at` is when the previous clip ends), so playback is gapless. Synthesis is 5–6× faster than playback, so the next sentence is always decoded before the current one finishes. With auto-speak on, playback starts at the first *finished* sentence while the reply is still being written. Stop, a new question, or Listen on another reply aborts in-flight requests and stops the scheduled sources. Engines: Kokoro via MLX when it's importable, Kokoro via ONNX otherwise, and the browser's `speechSynthesis` as a last resort.
+
+### Telemetry
+
+The final assistant message of each turn carries `meta.stats`: model, model calls, per-tool seconds, tokens in and out, context-window use, tokens per second and wall time. It's stored in the `messages.meta` column, which was added by an automatic migration, so the chip still appears on reopened chats. `Session.history()` strips `meta` (and images) before anything is sent back to the model.
