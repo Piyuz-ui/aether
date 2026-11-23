@@ -2,8 +2,8 @@
 
 /** Small tactile building blocks: jiggly buttons, tilt cards, chips, toggles. */
 import clsx from "clsx";
-import { motion, useMotionValue, useSpring, useTransform, type HTMLMotionProps } from "framer-motion";
-import type { ReactNode } from "react";
+import { AnimatePresence, motion, useMotionValue, useSpring, useTransform, type HTMLMotionProps } from "framer-motion";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 
 import { jelly } from "@/lib/motion";
 
@@ -44,28 +44,77 @@ export function JiggleButton({
   );
 }
 
+/** A compact frosted tooltip that springs in on hover or keyboard focus. */
+export function Tooltip({ label, children, align = "center" }: {
+  label: ReactNode;
+  children: ReactNode;
+  align?: "center" | "end";
+}) {
+  const [open, setOpen] = useState(false);
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const show = (delay: number) => {
+    if (timer.current) clearTimeout(timer.current);
+    timer.current = setTimeout(() => setOpen(true), delay);
+  };
+  const hide = () => {
+    if (timer.current) clearTimeout(timer.current);
+    setOpen(false);
+  };
+  useEffect(() => () => { if (timer.current) clearTimeout(timer.current); }, []);
+  return (
+    <span className="relative inline-flex" onPointerEnter={() => show(280)} onPointerLeave={hide}
+      onFocus={() => show(0)} onBlur={hide} onPointerDown={hide}>
+      {children}
+      <AnimatePresence>
+        {open && (
+          <span className={clsx("pointer-events-none absolute top-full z-50 mt-2",
+            align === "end" ? "right-0" : "left-1/2 -translate-x-1/2")}>
+            <motion.span role="tooltip"
+              initial={{ opacity: 0, y: -4, scale: 0.92 }} animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, y: -2, scale: 0.96, transition: { duration: 0.1 } }} transition={jelly}
+              className="glass-pop block whitespace-nowrap rounded-xl px-2.5 py-1.5 text-[11.5px] leading-tight text-frost">
+              {label}
+            </motion.span>
+          </span>
+        )}
+      </AnimatePresence>
+    </span>
+  );
+}
+
 export function IconButton({
   label,
+  hint,
+  tooltipAlign,
   className,
   children,
   ...rest
-}: HTMLMotionProps<"button"> & { label: string; children?: ReactNode }) {
+}: HTMLMotionProps<"button"> & {
+  label: string;
+  /** a second, quieter line in the tooltip */
+  hint?: string;
+  tooltipAlign?: "center" | "end";
+  children?: ReactNode;
+}) {
   return (
-    <motion.button
-      type="button"
-      aria-label={label}
-      title={label}
-      whileHover={{ scale: 1.08 }}
-      whileTap={{ scale: 0.9 }}
-      transition={jelly}
-      className={clsx(
-        "grid size-9 place-items-center rounded-xl text-mist transition-colors hover:bg-white/[0.07] hover:text-frost",
-        className,
-      )}
-      {...rest}
-    >
-      {children}
-    </motion.button>
+    <Tooltip align={tooltipAlign} label={hint
+      ? <><span className="block font-medium">{label}</span><span className="block text-[10.5px] text-mist">{hint}</span></>
+      : label}>
+      <motion.button
+        type="button"
+        aria-label={label}
+        whileHover={{ scale: 1.08 }}
+        whileTap={{ scale: 0.9 }}
+        transition={jelly}
+        className={clsx(
+          "grid size-9 place-items-center rounded-xl text-mist transition-colors hover:bg-white/[0.07] hover:text-frost",
+          className,
+        )}
+        {...rest}
+      >
+        {children}
+      </motion.button>
+    </Tooltip>
   );
 }
 

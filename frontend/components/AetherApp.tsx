@@ -1,7 +1,11 @@
 "use client";
 
 import { AnimatePresence, motion, useTransform } from "framer-motion";
-import { AlertTriangle, BookOpen, CalendarRange, Calculator, Globe, PanelRight, Plus, RefreshCw, UploadCloud, Waves } from "lucide-react";
+import clsx from "clsx";
+import {
+  AlertTriangle, BookOpen, Brain, CalendarRange, Calculator, Globe, Library, PanelRight, Plus, RefreshCw,
+  UploadCloud, Waves, Wrench, type LucideIcon,
+} from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { api } from "@/lib/api";
@@ -11,6 +15,7 @@ import { useReminders } from "@/lib/reminders";
 import type { AgentState, Health } from "@/lib/types";
 import { useAgent } from "@/lib/useAgent";
 import { useAttachments } from "@/lib/useAttachments";
+import { useLive } from "@/lib/useLive";
 import { speak, useWakeWord } from "@/lib/voice";
 
 import { AgentOrb, STATE_LABEL } from "./AgentOrb";
@@ -18,6 +23,7 @@ import { ApprovalModal } from "./ApprovalModal";
 import { Composer, type ComposerHandle } from "./Composer";
 import { Drawer, type DrawerTab } from "./Drawer";
 import { MessageView } from "./MessageView";
+import { ModelSwitcher } from "./ModelSwitcher";
 import { ChatsPanel } from "./panels/ChatsPanel";
 import { MemoryPanel } from "./panels/MemoryPanel";
 import { SettingsPanel } from "./panels/SettingsPanel";
@@ -39,12 +45,47 @@ function greeting() {
   return h < 5 ? "Still up?" : h < 12 ? "Good morning." : h < 17 ? "Good afternoon." : "Good evening.";
 }
 
+/** A small glowing dot: seafoam when ready, sky while working, amber awaiting approval, coral offline. */
+function LiveDot({ state, online }: { state: AgentState; online: boolean }) {
+  const color = !online ? "#fda4af" : state === "awaiting_approval" ? "#fcd34d" : state === "idle" ? "#5eead4" : "#7dd3fc";
+  return (
+    <span className="relative grid size-2 shrink-0 place-items-center" aria-hidden>
+      <motion.span className="absolute inset-0 rounded-full" style={{ background: color }}
+        animate={{ scale: [1, 2.4, 1], opacity: [0.55, 0, 0.55] }}
+        transition={{ duration: state === "idle" ? 2.6 : 1.2, repeat: Infinity, ease: "easeOut" }} />
+      <span className="relative size-2 rounded-full" style={{ background: color, boxShadow: `0 0 8px ${color}` }} />
+    </span>
+  );
+}
+
+/** Whisper-quiet proof that this is a stateful agent: tools · documents · memories. */
+function AgentStats({ tools, revision }: { tools: number; revision: number }) {
+  const docs = useLive(api.documents, revision, 30_000);
+  const facts = useLive(api.facts, revision, 30_000);
+  const ready = docs.data?.filter((d) => d.status === "ready").length;
+  const items: [LucideIcon, string, number | undefined][] = [
+    [Wrench, "tools", tools],
+    [Library, "docs", ready],
+    [Brain, "memories", facts.data?.length],
+  ];
+  return (
+    <div className="hidden items-center gap-3 pr-1 font-mono text-[11px] text-mist/85 md:flex" aria-label="Agent state">
+      {items.map(([Icon, label, n]) => (
+        <span key={label} className="inline-flex items-center gap-1 whitespace-nowrap">
+          <Icon className="size-3 text-glacier/70" />
+          <span className="text-frost/85">{n ?? "–"}</span> {n === 1 ? label.replace(/s$/, "") : label}
+        </span>
+      ))}
+    </div>
+  );
+}
+
 function EmptyState({ state, onPick }: { state: AgentState; onPick: (t: string) => void }) {
   return (
     <motion.div variants={popIn} initial="hidden" animate="show" className="mx-auto flex max-w-2xl flex-col items-center px-4 pt-[8vh] text-center">
       <AgentOrb state={state} size={132} />
       <h1 className="mt-10 text-3xl font-semibold tracking-tight text-frost sm:text-4xl">{greeting()}</h1>
-      <p className="mt-3 max-w-md text-[15px] leading-relaxed text-mist">
+      <p className="mt-3 max-w-md text-balance text-[15px] leading-relaxed text-mist">
         I&apos;m AETHER, your local study, research and productivity agent. I can search the web, read your
         notes, track deadlines and remember what matters, all on this computer.
       </p>
@@ -175,28 +216,42 @@ export function AetherApp() {
             )}
           </AnimatePresence>
           {/* header */}
-          <header className="px-3 pt-3 sm:px-5">
+          <header className="relative z-30 px-3 pt-3 sm:px-5">
             <div className="glass mx-auto flex max-w-4xl items-center gap-3 rounded-[22px] py-2 pl-3 pr-2">
               <AgentOrb state={state} size={34} />
               <div className="min-w-0 flex-1">
                 <div className="text-[15px] font-semibold tracking-[0.22em] text-frost">AETHER</div>
-                <AnimatePresence mode="wait" initial={false}>
-                  <motion.div key={state + String(wakeArmed)} initial={{ opacity: 0, y: 4 }} animate={{ opacity: 1, y: 0 }}
-                    exit={{ opacity: 0, y: -4 }} transition={{ duration: 0.18 }}
-                    className={state === "awaiting_approval" ? "text-xs text-amber" : "text-xs text-mist"}>
-                    {wakeArmed ? "Listening…" : STATE_LABEL[state]}
-                    {health?.model && state === "idle" && !wakeArmed && <span className="text-mist/60"> · {health.model}</span>}
-                  </motion.div>
-                </AnimatePresence>
+                <div className="flex min-w-0 items-center gap-1.5 text-xs">
+                  <LiveDot state={state} online={!!health?.ok} />
+                  <AnimatePresence mode="wait" initial={false}>
+                    <motion.span key={state + String(wakeArmed) + String(health?.ok)}
+                      initial={{ opacity: 0, y: 4 }} animate={{ opacity: 1, y: 0 }}
+                      exit={{ opacity: 0, y: -4 }} transition={{ duration: 0.18 }}
+                      className={clsx("whitespace-nowrap",
+                        state === "awaiting_approval" ? "text-amber" : health && !health.ok ? "text-coral" : "text-frost/80")}>
+                      {wakeArmed ? "Listening…" : health && !health.ok && state === "idle" ? "Offline" : STATE_LABEL[state]}
+                    </motion.span>
+                  </AnimatePresence>
+                  {health?.model && <span className="text-mist/70">·</span>}
+                  {health?.model && (
+                    <ModelSwitcher current={health.model} disabled={agent.busy} toast={toast}
+                      onSwitched={(m) => { setHealth((h) => (h ? { ...h, model: m, model_note: null } : h)); void loadHealth(); }} />
+                  )}
+                </div>
               </div>
-              <IconButton label="New chat" onClick={() => { agent.newChat(); composer.current?.focus(); }}>
+              {health?.ok && <AgentStats tools={health.tools} revision={agent.revision} />}
+              <IconButton label="New chat" hint="Start a fresh conversation" onClick={() => { agent.newChat(); composer.current?.focus(); }}>
                 <Plus className="size-[18px]" />
               </IconButton>
-              <IconButton label={prefs.calm ? "Calm mode on" : "Calm mode off"} onClick={() => setPref("calm", !prefs.calm)}
+              <IconButton label={prefs.calm ? "Calm mode: on" : "Calm mode: off"}
+                hint={prefs.calm ? "Turn the motion back on" : "Reduce motion: no drift or wobble"}
+                onClick={() => setPref("calm", !prefs.calm)}
                 className={prefs.calm ? "bg-seafoam/15 text-seafoam" : undefined}>
                 <Waves className="size-[18px]" />
               </IconButton>
-              <IconButton label={prefs.drawerOpen ? "Hide panel" : "Show panel"} onClick={() => setPref("drawerOpen", !prefs.drawerOpen)}
+              <IconButton label={prefs.drawerOpen ? "Hide side panel" : "Show side panel"}
+                hint="Vault · Memory · Tasks · Chats · Settings" tooltipAlign="end"
+                onClick={() => setPref("drawerOpen", !prefs.drawerOpen)}
                 className={prefs.drawerOpen ? "bg-white/[0.07] text-frost" : undefined}>
                 <PanelRight className="size-[18px]" />
               </IconButton>
@@ -233,7 +288,7 @@ export function AetherApp() {
               <Composer ref={composer} busy={agent.busy} onSend={sendWithFiles} onStop={agent.stop}
                 autoSendVoice={prefs.autoSendVoice} attachments={files.items} indexing={files.indexing || files.uploading}
                 onAttach={(f) => void files.add(f)} onRemoveAttachment={files.remove} />
-              <p className="mt-2 text-center text-[11px] text-mist/60">
+              <p className="mt-2 text-center text-[11px] text-mist/75">
                 Runs locally on Ollama · risky actions always ask first
               </p>
             </div>

@@ -68,6 +68,17 @@ body {
     0 24px 60px rgba(2, 10, 28, 0.65);
 }
 
+/* Popovers (dropdowns, tooltips) that float out of another glass surface. A nested
+   backdrop-filter can only blur its parent, not the page behind it, so these use a
+   near-opaque frosted fill instead of relying on blur. */
+.glass-pop {
+  background: linear-gradient(180deg, rgba(18, 40, 70, 0.96), rgba(10, 25, 47, 0.97));
+  border: 1px solid rgba(148, 210, 255, 0.14);
+  box-shadow:
+    inset 1px 1px 0 0 var(--glass-rim),
+    0 18px 44px rgba(2, 10, 28, 0.7);
+}
+
 .glass-inset {
   background: rgba(5, 12, 26, 0.45);
   border: 1px solid rgba(148, 210, 255, 0.08);
