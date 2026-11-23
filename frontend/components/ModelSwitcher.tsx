@@ -156,7 +156,7 @@ export function ModelSwitcher({ current, disabled, onSwitched, toast, onOpenSett
                 <div key={h.name}>
                   <GroupLabel icon={<MonitorSmartphone className="size-3" />}
                     badge={<span className={clsx("inline-flex items-center gap-0.5 normal-case tracking-normal", h.online ? "text-seafoam" : "text-coral")}>
-                      {h.online ? <><ShieldCheck className="size-3" />your network</> : "offline"}</span>}>
+                      {h.online ? <><ShieldCheck className="size-3" />{h.route === "tailscale" ? "via Tailscale" : "your network"}</> : "offline"}</span>}>
                     On {h.name}
                   </GroupLabel>
                   {!h.online && <div className="px-2.5 py-1 text-[11px] text-mist">Turn it on and open Ollama there.</div>}

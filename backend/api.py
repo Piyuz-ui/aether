@@ -111,6 +111,8 @@ class ModelChoice(BaseModel):
 class HostIn(BaseModel):
     # "192.168.1.50", "my-pc.local:11434" or "http://100.64.0.7:11434"
     url: str = Field(min_length=3, max_length=200, pattern=r"^(https?://)?[A-Za-z0-9.\-\[\]:]+/?$")
+    # optional second address for when you're away from home, usually the PC's Tailscale address
+    remote_url: str | None = Field(default=None, max_length=200)
 
 
 class KeyIn(BaseModel):
@@ -305,7 +307,34 @@ def create_app(settings: Settings | None = None, *, llm: Any = None,
         return await snapshot(ctx.llm, monitor_transport=getattr(request.app.state, "monitor_transport", None),
                               prober=getattr(request.app.state, "link_prober", None))
 
+    @app.get("/api/gpu")
+    async def gpu_live(request: Request, model: str = "") -> dict[str, Any]:
+        """Live GPU numbers for the computer running `model` (default: the current one). Light
+        enough to poll every second while a reply streams; only network PCs with AETHER's
+        hardware monitor report them."""
+        from aether.hardware import monitor_stats
+        ctx = ctx_of(request)
+        model = model or ctx.agent.model or ""
+        if not getattr(ctx.llm, "is_remote", lambda _m: False)(model):
+            return {"available": False, "reason": "cloud" if getattr(ctx.llm, "is_cloud", lambda _m: False)(model)
+                    else "local"}
+        host, _bare = ctx.llm.split_host(model)
+        await ctx.llm.ensure_route(host or "")
+        url = ctx.llm.host_urls.get(host or "")
+        stats = await monitor_stats(url, getattr(request.app.state, "monitor_transport", None)) if url else None
+        if not stats or not stats["gpus"]:
+            return {"available": False, "reason": "no_monitor", "host": host}
+        g = stats["gpus"][0]
+        return {"available": True, "host": host, "name": g["name"], "util_pct": g["util_pct"],
+                "vram_used_gb": g["vram_used_gb"], "vram_total_gb": g["vram_total_gb"],
+                "temp_c": g["temp_c"], "power_w": g["power_w"]}
+
     # ------------------------------------------- computers on your network
+    def save_hosts(request: Request, ctx: AppContext) -> None:
+        addrs = {n: (a if len(a) > 1 else a[0]) for n, a in ctx.llm.host_addrs.items()}
+        save_env_value(getattr(request.app.state, "env_file", ENV_FILE), "AETHER_OLLAMA_HOSTS",
+                       json.dumps(addrs) if addrs else None)
+
     @app.get("/api/hosts")
     async def hosts(request: Request) -> list[dict[str, Any]]:
         ctx = ctx_of(request)
@@ -313,22 +342,31 @@ def create_app(settings: Settings | None = None, *, llm: Any = None,
 
     @app.put("/api/hosts/{name}")
     async def set_host(name: str, body: HostIn, request: Request) -> dict[str, Any]:
-        """Check that Ollama answers at the address, then save it to backend/.env."""
+        """Check the address(es), then save to backend/.env. `remote_url` is an optional second
+        address, usually the PC's Tailscale one, used whenever the home address doesn't answer."""
         ctx = ctx_of(request)
         if not hasattr(ctx.llm, "set_host"):
             raise HTTPException(404, detail={"message": "Network computers aren't supported here."})
-        url = normalize_host_url(body.url)
-        if url is None:
-            raise HTTPException(422, detail={
-                "message": f"'{body.url.strip()[:60]}' isn't a valid address.",
-                "hint": "Type just the PC's address once, e.g. 192.168.1.9 (run ipconfig on the PC to see it)."})
+        urls = []
+        for raw, what in ((body.url, "address"), (body.remote_url, "remote address")):
+            if not raw or not raw.strip():
+                continue
+            url = normalize_host_url(raw)
+            if url is None:
+                raise HTTPException(422, detail={
+                    "message": f"'{raw.strip()[:60]}' isn't a valid {what}.",
+                    "hint": "Type just one address, e.g. 192.168.1.9 at home or 100.101.102.103 for Tailscale."})
+            if url not in urls:
+                urls.append(url)
         try:
-            await ctx.llm.set_host(name, url)
+            reach = await ctx.llm.set_host(name, urls)
         except OllamaError as e:
             raise HTTPException(422, detail={"message": e.message, "hint": e.hint}) from e
-        save_env_value(getattr(request.app.state, "env_file", ENV_FILE), "AETHER_OLLAMA_HOSTS",
-                       json.dumps(ctx.llm.host_urls))
-        return next(h for h in await ctx.llm.hosts_catalog() if h["name"] == name)
+        save_hosts(request, ctx)
+        entry = next(h for h in await ctx.llm.hosts_catalog() if h["name"] == name)
+        # Saved, but tell the user which address didn't answer right now (e.g. Tailscale off here).
+        entry["unreachable"] = [u for u, ok in reach.items() if not ok]
+        return entry
 
     @app.delete("/api/hosts/{name}")
     async def remove_host(name: str, request: Request) -> dict[str, Any]:
@@ -336,8 +374,7 @@ def create_app(settings: Settings | None = None, *, llm: Any = None,
         if name not in getattr(ctx.llm, "hosts", {}):
             raise HTTPException(404, detail={"message": f"There's no computer named '{name}'."})
         await ctx.llm.set_host(name, None)
-        save_env_value(getattr(request.app.state, "env_file", ENV_FILE), "AETHER_OLLAMA_HOSTS",
-                       json.dumps(ctx.llm.host_urls) if ctx.llm.host_urls else None)
+        save_hosts(request, ctx)
         if ctx.agent.model and ctx.llm.split_host(ctx.agent.model)[0] == name:
             ctx.agent.model, ctx.agent.model_note = None, None  # back to this Mac's default
         return {"removed": name}

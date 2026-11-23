@@ -160,3 +160,98 @@ def test_api_adds_switches_to_and_removes_a_pc(tmp_path: Path) -> None:
 def test_host_addresses_are_validated(raw: str, expected: str | None) -> None:
     import api
     assert api.normalize_host_url(raw) == expected
+
+
+# ------------------------------------------------- away from home: Tailscale
+class Network:
+    """Several fake computers by address, e.g. the PC's home IP and its Tailscale IP."""
+
+    def __init__(self, **machines: FakePC):
+        self.machines = {k.replace("_", "."): v for k, v in machines.items()}
+
+    def __call__(self, request: httpx.Request) -> httpx.Response:
+        pc = self.machines.get(request.url.host)
+        if pc is None:
+            raise httpx.ConnectError("no route", request=request)
+        return pc(request)
+
+
+HOME, TS = "http://192.168.1.9:11434", "http://100.101.102.103:11434"
+
+
+def two_address_router(home: FakePC, remote: FakePC) -> ModelRouter:
+    net = Network(**{"192_168_1_9": home, "100_101_102_103": remote})
+    mac = FakePC({"qwen2.5:7b": ["completion", "tools"]})
+    return ModelRouter(OllamaClient("http://mac.test", transport=httpx.MockTransport(mac)),
+                       hosts={"pc": [HOME, TS]}, host_transport=httpx.MockTransport(net))
+
+
+@pytest.mark.parametrize("url,kind", [
+    ("http://192.168.1.9:11434", "home"), ("http://10.0.0.5:11434", "home"), ("http://my-pc.local:11434", "home"),
+    ("http://100.101.102.103:11434", "tailscale"), ("http://desktop.tail1234.ts.net:11434", "tailscale"),
+    ("http://8.8.8.8:11434", "internet"),
+])
+def test_address_kinds(url: str, kind: str) -> None:
+    from aether.llm.router import address_kind
+    assert address_kind(url) == kind
+
+
+async def test_away_from_home_it_uses_tailscale_and_switches_back_at_home() -> None:
+    home, remote = FakePC(PC_MODELS, online=False), FakePC(PC_MODELS)   # at college
+    r = two_address_router(home, remote)
+    out = [d async for d in r.chat_stream(model="qwen3:14b@pc", messages=[{"role": "user", "content": "hi"}])]
+    assert out[0].content == "Hi from the GPU." and len(remote.chats) == 1 and not home.chats
+    assert r.host_urls["pc"] == TS
+    cat = (await r.hosts_catalog())[0]
+    assert cat["route"] == "tailscale" and [a["active"] for a in cat["addresses"]] == [False, True]
+
+    home.online = True                                                   # back home
+    assert await r.ensure_route("pc", force=True)
+    assert r.host_urls["pc"] == HOME                                     # home is preferred
+    [d async for d in r.chat_stream(model="qwen3:14b@pc", messages=[{"role": "user", "content": "hi"}])]
+    assert len(home.chats) == 1
+
+
+async def test_nothing_answers_falls_back_to_the_mac_with_a_reason() -> None:
+    r = two_address_router(FakePC(PC_MODELS, online=False), FakePC(PC_MODELS, online=False))
+    model, note = await r.resolve_model("qwen3:14b@pc", ["qwen2.5:7b"])
+    assert model == "qwen2.5:7b" and "isn't reachable" in (note or "")
+
+
+async def test_a_working_route_is_trusted_for_a_while() -> None:
+    home, remote = FakePC(PC_MODELS), FakePC(PC_MODELS)
+    r = two_address_router(home, remote)
+    assert await r.ensure_route("pc")
+    home.online = False                      # changes within the trust window aren't re-checked...
+    assert await r.ensure_route("pc") and r.host_urls["pc"] == HOME
+    assert await r.ensure_route("pc", force=True) and r.host_urls["pc"] == TS  # ...but forced ones are
+
+
+def test_settings_read_a_list_of_addresses(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("AETHER_OLLAMA_HOSTS", json.dumps({"pc": [HOME, TS]}))
+    assert Settings(_env_file=None).ollama_hosts == {"pc": [HOME, TS]}
+
+
+def test_api_saves_a_home_and_a_remote_address(tmp_path: Path) -> None:
+    from fastapi.testclient import TestClient
+
+    import api
+
+    home, remote = FakePC(PC_MODELS), FakePC(PC_MODELS, online=False)   # Tailscale off on the Mac for now
+    r = two_address_router(home, remote)
+    r.host_addrs.clear(), r.hosts.clear(), r.host_urls.clear()
+    app = api.create_app(Settings(), llm=r, db_path=":memory:")
+    env = tmp_path / ".env"
+    app.state.env_file = env
+    with TestClient(app) as client:
+        bad = client.put("/api/hosts/pc", json={"url": "192.168.1.9", "remote_url": "not an address"})
+        assert bad.status_code == 422 and "remote address" in bad.json()["detail"]["message"]
+        ok = client.put("/api/hosts/pc", json={"url": "192.168.1.9", "remote_url": "100.101.102.103"})
+        body = ok.json()
+        assert ok.status_code == 200 and body["route"] == "home"
+        assert body["unreachable"] == [TS]                              # saved anyway, but flagged
+        assert [a["kind"] for a in body["addresses"]] == ["home", "tailscale"]
+        assert json.loads(env.read_text().split("=", 1)[1]) == {"pc": [HOME, TS]}
+        single = client.put("/api/hosts/pc", json={"url": "192.168.1.9", "remote_url": ""})
+        assert single.status_code == 200
+        assert json.loads(env.read_text().split("=", 1)[1]) == {"pc": HOME}

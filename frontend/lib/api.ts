@@ -7,6 +7,7 @@ export type McpServer = {
 import type {
   ClassSlot,
   CloudProvider,
+  GpuLive,
   HardwareCard,
   ModelList,
   NetworkHost,
@@ -68,7 +69,9 @@ export const api = {
   providers: () => request<CloudProvider[]>("/api/providers"),
   hosts: () => request<NetworkHost[]>("/api/hosts"),
   hardware: () => request<HardwareCard[]>("/api/hardware"),
-  setHost: (name: string, url: string) => request<NetworkHost>(`/api/hosts/${name}`, json("PUT", { url })),
+  gpu: (model?: string) => request<GpuLive>(`/api/gpu${model ? `?model=${encodeURIComponent(model)}` : ""}`),
+  setHost: (name: string, url: string, remoteUrl = "") =>
+    request<NetworkHost>(`/api/hosts/${name}`, json("PUT", { url: url || remoteUrl, remote_url: url ? remoteUrl : "" })),
   removeHost: (name: string) => request<{ removed: string }>(`/api/hosts/${name}`, json("DELETE")),
   setProviderKey: (id: string, key: string) =>
     request<CloudProvider>(`/api/providers/${id}/key`, json("PUT", { key })),

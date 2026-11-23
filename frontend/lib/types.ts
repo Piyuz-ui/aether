@@ -79,6 +79,8 @@ export type AssistantMessage = {
   thinking: string; // live reasoning tokens from thinking models
   content: string; // the final answer
   status: "streaming" | "done" | "error" | "stopped";
+  /** The model answering (may differ from the selected one, e.g. a vision model for images). */
+  model?: string;
   stats?: RunStats;
   error?: { message: string; hint?: string };
   learned?: Fact[];
@@ -113,9 +115,16 @@ export type Health = {
 };
 
 export type HostModel = { id: string; name: string; vision: boolean; tools: boolean };
+export type AddressKind = "home" | "tailscale" | "internet";
 export type NetworkHost = {
   name: string;
+  /** The address in use right now. */
   url: string;
+  route?: AddressKind;
+  /** All saved addresses, in order of preference (home first, then remote). */
+  addresses?: { url: string; kind: AddressKind; active: boolean }[];
+  /** After saving: addresses that didn't answer at that moment. */
+  unreachable?: string[];
   online: boolean;
   models: HostModel[];
   error: { message: string; hint?: string } | null;
@@ -248,7 +257,13 @@ export type HardwareCard = {
   online: boolean;
   monitor: "built-in" | "ok" | "missing";
   link?: LinkQuality;
+  route?: AddressKind;
   availability?: Availability;
   system: MachineSystem | null;
   loaded: LoadedModel[];
 };
+
+export type GpuLive =
+  | { available: true; host: string; name: string; util_pct: number | null; vram_used_gb: number | null;
+      vram_total_gb: number | null; temp_c: number | null; power_w: number | null }
+  | { available: false; reason: "local" | "cloud" | "no_monitor"; host?: string };

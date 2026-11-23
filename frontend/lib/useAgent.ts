@@ -99,8 +99,13 @@ function reducer(state: State, action: Action): State {
 function applyEvent(state: State, e: AgentEvent): State {
   const d = e.data as Record<string, never>;
   switch (e.type) {
-    case "status":
-      return { ...state, agentState: d.state as AgentState };
+    case "status": {
+      const next = { ...state, agentState: d.state as AgentState };
+      // The run's first status names the model actually answering (it can switch for images).
+      return d.model
+        ? { ...next, messages: updateLast(state.messages, (m) => ({ ...m, model: d.model as string })) }
+        : next;
+    }
     case "token":
       return {
         ...state,

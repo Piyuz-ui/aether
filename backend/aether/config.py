@@ -41,7 +41,9 @@ class Settings(BaseSettings):
     request_timeout_s: float = 300.0
     # Other computers running Ollama on your network, e.g. a GPU PC: {"pc": "http://192.168.1.50:11434"}.
     # Their models appear as "<model>@<name>". Set in Settings, or as JSON in AETHER_OLLAMA_HOSTS.
-    ollama_hosts: dict[str, str] = Field(default_factory=dict)
+    # A computer can have several addresses, tried in order: {"pc": ["http://192.168.1.9:11434",
+    # "http://100.101.102.103:11434"]} uses the home address at home and Tailscale anywhere else.
+    ollama_hosts: dict[str, str | list[str]] = Field(default_factory=dict)
 
     # --- optional cloud brains (off unless a key is set; see .env.example) ---------
     gemini_api_key: SecretStr = _key("GEMINI_API_KEY", "GOOGLE_API_KEY")

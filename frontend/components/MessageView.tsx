@@ -16,6 +16,7 @@ import type { AssistantMessage, Message } from "@/lib/types";
 
 import { QuizDeck } from "./QuizDeck";
 import { useLandingId } from "./SendFlight";
+import { GpuLive } from "./GpuLive";
 import { TelemetryChip } from "./Telemetry";
 import { ThoughtLine, ToolPill } from "./ToolPill";
 import { Spinner } from "./ui";
@@ -141,7 +142,10 @@ function AssistantBubble({ m }: { m: AssistantMessage }) {
             <div className="mt-2 flex items-center gap-1.5 text-xs text-amber"><Square className="size-3" /> stopped</div>
           )}
           <div className="flex flex-wrap items-end justify-between gap-2">
-            <TelemetryChip m={m} />
+            <div className="flex min-w-0 flex-col gap-1">
+              <GpuLive active={streaming} model={m.model} />
+              <TelemetryChip m={m} />
+            </div>
             {m.status === "done" && m.content && <ListenButton id={m.id} text={spokenText(m)} />}
           </div>
         </motion.div>

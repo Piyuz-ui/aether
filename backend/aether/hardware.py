@@ -292,11 +292,14 @@ async def snapshot(router: Any, *, monitor_transport: httpx.AsyncBaseTransport |
         else:
             online, system = await asyncio.gather(client.health(), monitor_stats(urls[name], monitor_transport))
             monitor_up = system is not None
-        return {"id": name, "label": name, "url": urls[name], "online": online,
+        from .llm.router import address_kind
+        return {"id": name, "label": name, "url": urls[name], "route": address_kind(urls[name]), "online": online,
                 "monitor": "ok" if system else "missing", "system": system, "link": link,
                 "availability": availability(online, link, monitor_up),
                 "loaded": await loaded_models(client) if online else []}
 
+    if hasattr(router, "ensure_routes"):
+        await router.ensure_routes()  # home or Tailscale: whichever answers right now
     cards = await asyncio.gather(local(), *(remote(n, c) for n, c in hosts.items()))
     for c in cards:
         c["took_ms"] = round((time.perf_counter() - started) * 1000)

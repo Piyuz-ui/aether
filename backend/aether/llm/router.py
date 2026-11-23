@@ -10,8 +10,11 @@ difference. Embeddings (the knowledge vault and memory) always stay on this mach
 """
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import os
 import re
+import time
 from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any
@@ -20,13 +23,40 @@ from .cloud import (PROVIDERS, ClaudeProvider, OpenAICompatProvider, split_model
 from .ollama import ChatDelta, OllamaClient, OllamaError
 
 HOST_NAME = re.compile(r"^[a-z][a-z0-9-]{0,23}$")
+ROUTE_TTL_S = 15.0  # how long a working route is trusted before it's checked again
+
+
+def address_kind(url: str) -> str:
+    """How an address reaches a computer: "home" (your local network), "tailscale" (your private
+    Tailscale network, works from anywhere) or "internet"."""
+    import ipaddress
+    from urllib.parse import urlsplit
+
+    host = (urlsplit(url).hostname or "").lower()
+    if host.endswith(".ts.net"):
+        return "tailscale"
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        return "home" if host.endswith(".local") or "." not in host else "internet"
+    if ip in ipaddress.ip_network("100.64.0.0/10"):
+        return "tailscale"
+    return "home" if ip.is_private or ip.is_loopback else "internet"
+
+
+def _as_list(value: str | list[str] | None) -> list[str]:
+    if not value:
+        return []
+    items = value if isinstance(value, list) else [v for v in str(value).split(",")]
+    return [u.strip().rstrip("/") for u in items if u and u.strip()]
+
 
 class ModelRouter:
     def __init__(self, ollama: OllamaClient, *, keys: dict[str, str] | None = None,
                  context_length: int = 16384, cloud_max_output_tokens: int = 8192,
                  claude_max_output_tokens: int = 16000, timeout_s: float = 300.0,
                  transport: Any = None, claude_client: Any = None,
-                 hosts: dict[str, str] | None = None, host_transport: Any = None):
+                 hosts: dict[str, str | list[str]] | None = None, host_transport: Any = None):
         self.ollama = ollama
         self.context_length = context_length
         self._limits = (cloud_max_output_tokens, claude_max_output_tokens, timeout_s)
@@ -37,34 +67,81 @@ class ModelRouter:
             if key:
                 self.providers[pid] = self._make(pid, key)
         self._host_transport = host_transport  # tests inject a mock Ollama
-        self.hosts: dict[str, OllamaClient] = {}
-        self.host_urls: dict[str, str] = {}
-        for name, url in (hosts or {}).items():
-            if HOST_NAME.match(name) and url:
-                self.hosts[name] = self._make_host(url)
-                self.host_urls[name] = url.rstrip("/")
+        # Each computer can have several addresses, in order of preference: usually its home
+        # address first, then its Tailscale address for when you're away. The router uses the
+        # first one that answers and switches automatically when you change networks.
+        self.host_addrs: dict[str, list[str]] = {}
+        self._clients: dict[str, OllamaClient] = {}        # one client per address
+        self.hosts: dict[str, OllamaClient] = {}           # name → client of the address in use
+        self.host_urls: dict[str, str] = {}                # name → address in use
+        self._route_ok: dict[str, tuple[float, bool]] = {}  # name → (checked at, worked)
+        for name, value in (hosts or {}).items():
+            addrs = _as_list(value)
+            if HOST_NAME.match(name) and addrs:
+                self.host_addrs[name] = addrs
+                self._use(name, addrs[0])
 
     def _make_host(self, url: str) -> OllamaClient:
         return OllamaClient(url, timeout_s=self._limits[2], transport=self._host_transport)
 
-    async def set_host(self, name: str, url: str | None) -> None:
-        """Add (after checking it answers), replace or remove a network Ollama host, live."""
+    def _client_for(self, url: str) -> OllamaClient:
+        if url not in self._clients:
+            self._clients[url] = self._make_host(url)
+        return self._clients[url]
+
+    def _use(self, name: str, url: str) -> None:
+        self.hosts[name] = self._client_for(url)
+        self.host_urls[name] = url
+
+    async def _answers(self, url: str, timeout: float = 2.0) -> bool:
+        try:
+            r = await self._client_for(url)._client.get("/api/version", timeout=timeout)
+            return r.status_code == 200
+        except Exception:
+            return False
+
+    async def ensure_route(self, name: str, *, force: bool = False) -> bool:
+        """Point `name` at the first of its addresses that answers right now (home before
+        Tailscale). Cheap when nothing changed: a working route is trusted for 15 s."""
+        addrs = self.host_addrs.get(name) or []
+        if not addrs:
+            return False
+        checked_at, worked = self._route_ok.get(name, (0.0, False))
+        if not force and worked and time.monotonic() - checked_at < ROUTE_TTL_S:
+            return True
+        results = await asyncio.gather(*(self._answers(u) for u in addrs))
+        chosen = next((u for u, ok in zip(addrs, results) if ok), None)
+        if chosen is not None:
+            self._use(name, chosen)
+        self._route_ok[name] = (time.monotonic(), chosen is not None)
+        return chosen is not None
+
+    async def ensure_routes(self) -> None:
+        await asyncio.gather(*(self.ensure_route(n) for n in list(self.host_addrs)))
+
+    async def set_host(self, name: str, url: str | list[str] | None) -> dict[str, bool]:
+        """Add or replace a network computer with one or more addresses (in order of preference),
+        or remove it. At least one address must answer now. Returns which ones did."""
         if not HOST_NAME.match(name):
             raise OllamaError("Host names use lowercase letters, digits and dashes (e.g. pc).")
-        old = self.hosts.pop(name, None)
-        self.host_urls.pop(name, None)
-        if old is not None:
-            await old.aclose()
-        if not url:
-            return
-        client = self._make_host(url)
-        if not await client.health():
-            await client.aclose()
-            raise OllamaError(f"No Ollama answered at {url}.",
+        addrs = _as_list(url)
+        if not addrs:
+            self.host_addrs.pop(name, None)
+            self.hosts.pop(name, None)
+            self.host_urls.pop(name, None)
+            self._route_ok.pop(name, None)
+            return {}
+        reach = dict(zip(addrs, await asyncio.gather(*(self._answers(u, 4.0) for u in addrs))))
+        if not any(reach.values()):
+            tried = " or ".join(addrs)
+            raise OllamaError(f"No Ollama answered at {tried}.",
                               hint="On that computer: open Ollama, set OLLAMA_HOST=0.0.0.0 and allow "
-                                   "port 11434 through the firewall (see pc/setup-ollama-pc.ps1).")
-        self.hosts[name] = client
-        self.host_urls[name] = url.rstrip("/")
+                                   "port 11434 through the firewall (see pc/setup-ollama-pc.ps1). For a "
+                                   "Tailscale address, make sure Tailscale is on here and on the PC.")
+        self.host_addrs[name] = addrs
+        self._use(name, next(u for u in addrs if reach[u]))
+        self._route_ok[name] = (time.monotonic(), True)
+        return reach
 
     def _make(self, pid: str, key: str) -> Any:
         out_cap, claude_cap, timeout_s = self._limits
@@ -149,6 +226,7 @@ class ModelRouter:
     async def resolve_model(self, preferred: str, fallbacks: list[str]) -> tuple[str, str | None]:
         if self.is_remote(preferred):
             host, bare = self.split_host(preferred)
+            await self.ensure_route(host or "")
             client = self.hosts.get(host or "")
             try:
                 if client is not None and bare in await client.list_models():
@@ -195,6 +273,7 @@ class ModelRouter:
             found = None
         if found:
             return found
+        await self.ensure_routes()
         for name, client in self.hosts.items():
             try:
                 hit = await client.find_model_with(*needs)
@@ -213,9 +292,24 @@ class ModelRouter:
             provider, bare = self._cloud(model)
             return provider.chat_stream(model=bare, messages=messages, tools=tools,
                                         options=options, think=think)
+        host, _ = self.split_host(model)
+        if host is not None and len(self.host_addrs.get(host, [])) > 1:
+            return self._routed_stream(host, model, messages, tools, options, think)
         client, bare = self._ollama_for(model)
         return client.chat_stream(model=bare, messages=messages, tools=tools,
                                   options=options, think=think)
+
+    async def _routed_stream(self, host: str, model: str, messages: list[dict[str, Any]],
+                             tools: list[dict[str, Any]] | None, options: dict[str, Any] | None,
+                             think: bool) -> AsyncIterator[ChatDelta]:
+        """Pick the working address (home or Tailscale) first, then stream from it. Closing this
+        stream closes the backend's too, so stopping early still stops the model."""
+        await self.ensure_route(host)
+        client, bare = self._ollama_for(model)
+        async with contextlib.aclosing(client.chat_stream(model=bare, messages=messages, tools=tools,
+                                                          options=options, think=think)) as inner:
+            async for d in inner:
+                yield d
 
     async def embed(self, texts: list[str], model: str) -> list[list[float]]:
         return await self.ollama.embed(texts, model)
@@ -223,8 +317,8 @@ class ModelRouter:
     async def aclose(self) -> None:
         for p in self.providers.values():
             await p.aclose()
-        for h in self.hosts.values():
-            await h.aclose()
+        for c in self._clients.values():
+            await c.aclose()
         await self.ollama.aclose()
 
     # -------------------------------------------------------------- catalog
@@ -251,9 +345,14 @@ class ModelRouter:
 
     async def hosts_catalog(self) -> list[dict[str, Any]]:
         """Every network Ollama host: its address, whether it answers, and its chat models."""
+        await self.ensure_routes()
         out = []
         for name, client in self.hosts.items():
-            entry: dict[str, Any] = {"name": name, "url": self.host_urls[name], "online": False,
+            active = self.host_urls[name]
+            entry: dict[str, Any] = {"name": name, "url": active, "online": False,
+                                     "route": address_kind(active),
+                                     "addresses": [{"url": u, "kind": address_kind(u), "active": u == active}
+                                                   for u in self.host_addrs.get(name, [active])],
                                      "models": [], "error": None}
             try:
                 names = await client.list_models()
@@ -277,7 +376,7 @@ def router_from_settings(settings: Any) -> ModelRouter:
                        cloud_max_output_tokens=settings.cloud_max_output_tokens,
                        claude_max_output_tokens=settings.claude_max_output_tokens,
                        timeout_s=settings.request_timeout_s,
-                       hosts=dict(getattr(settings, "ollama_hosts", {}) or {}))
+                       hosts=dict(getattr(settings, "ollama_hosts", {}) or {}))  # str or [home, remote]
 
 
 def save_env_value(env_file: Path, name: str, value: str | None) -> None:

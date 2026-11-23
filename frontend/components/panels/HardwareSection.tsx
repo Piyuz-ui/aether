@@ -121,13 +121,15 @@ function AvailabilityBanner({ a }: { a: Availability }) {
   );
 }
 
-function Connection({ link }: { link: LinkQuality }) {
+function Connection({ link, route }: { link: LinkQuality; route?: string }) {
   if (link.quality === "unreachable") return null;
   const ms = (n: number | null) => (n == null ? "–" : `${n < 10 ? n.toFixed(1) : Math.round(n)} ms`);
   return (
     <div className="space-y-2">
       <div className="flex items-center justify-between">
-        <span className="text-[10.5px] uppercase tracking-[0.14em] text-mist">Connection from this Mac</span>
+        <span className="text-[10.5px] uppercase tracking-[0.14em] text-mist">
+          Connection from this Mac{route === "tailscale" ? " · via Tailscale" : route === "home" ? " · home network" : ""}
+        </span>
         <span className={clsx("inline-flex items-center gap-1.5 text-[12px] font-medium", QUALITY_TEXT[link.quality])}>
           <Bars bars={link.bars} tone={link.quality} /> {cap(link.quality)}
         </span>
@@ -181,7 +183,7 @@ function MachineCard({ c }: { c: HardwareCard }) {
       </div>
 
       {c.availability && <AvailabilityBanner a={c.availability} />}
-      {c.link && <Connection link={c.link} />}
+      {c.link && <Connection link={c.link} route={c.route} />}
       <OwnNetwork net={sys?.network} />
 
       {gpu && (

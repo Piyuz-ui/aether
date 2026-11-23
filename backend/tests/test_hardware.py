@@ -174,3 +174,25 @@ def test_pc_network_from_the_monitor() -> None:
     assert n["network"] == {"type": "Wi-Fi", "link_mbps": 866.0, "adapter": "Intel Wi-Fi 7",
                             "wifi_signal_pct": 72.0, "quality": "good"}
     assert hardware.normalize_monitor(PC_STATS)["network"] is None
+
+
+def test_live_gpu_endpoint_follows_the_answering_model() -> None:
+    from fastapi.testclient import TestClient
+
+    import api
+    from aether.config import Settings
+
+    router = ModelRouter(OllamaClient("http://mac.test", transport=ollama([])),
+                         hosts={"pc": "http://192.168.1.9:11434"}, host_transport=ollama([]))
+    app = api.create_app(Settings(), llm=router, db_path=":memory:")
+    app.state.monitor_transport = monitor(PC_STATS)
+    with TestClient(app) as client:
+        live = client.get("/api/gpu", params={"model": "qwen3:14b@pc"}).json()
+        assert live == {"available": True, "host": "pc", "name": "NVIDIA GeForce RTX 5080", "util_pct": 64.0,
+                        "vram_used_gb": 9.6, "vram_total_gb": 15.9, "temp_c": 58.0, "power_w": 212.4}
+        assert client.get("/api/gpu", params={"model": "qwen2.5:7b"}).json()["reason"] == "local"
+        assert client.get("/api/gpu", params={"model": "gemini:gemini-2.5-flash"}).json()["reason"] == "cloud"
+    app.state.monitor_transport = monitor(None)
+    with TestClient(app) as client:
+        assert client.get("/api/gpu", params={"model": "qwen3:14b@pc"}).json() == {
+            "available": False, "reason": "no_monitor", "host": "pc"}

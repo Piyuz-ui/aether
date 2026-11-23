@@ -3,7 +3,7 @@
 /** Model switcher, system health, motion, voice and reminder settings. */
 import clsx from "clsx";
 import { motion } from "framer-motion";
-import { AudioLines, CalendarDays, Cloud, Cpu, Database, ExternalLink, KeyRound, MonitorSmartphone, Plug, RefreshCw, Trash2, Volume2 } from "lucide-react";
+import { AudioLines, CalendarDays, Cloud, Cpu, Database, ExternalLink, KeyRound, Plug, RefreshCw, Trash2, Volume2 } from "lucide-react";
 import { useState } from "react";
 
 import { api, ApiError } from "@/lib/api";
@@ -17,6 +17,7 @@ import { speechSupported } from "@/lib/voice";
 
 import { Chip, JiggleButton, Toggle } from "../ui";
 import { HardwareSection } from "./HardwareSection";
+import { HostsSection } from "./HostsSection";
 import { ErrorNote, inputClass, PanelTitle } from "./shared";
 
 const ENGINE_LABEL: Record<string, string> = {
@@ -79,125 +80,6 @@ function NeuralVoiceSection() {
           <Toggle checked={prefs.speakReplies} onChange={(v) => { if (v) voice.unlock(); else voice.stop(); setPref("speakReplies", v); }}
             label="Auto-speak replies" hint="Starts talking at the first finished sentence, while the rest is still being written." />
         </div>
-      </div>
-    </section>
-  );
-}
-
-function HostsSection({ revision, onChanged, toast }: {
-  revision: number;
-  onChanged: () => void;
-  toast: (t: string, b?: string) => void;
-}) {
-  const hosts = useLive(api.hosts, revision, () => 20_000);
-  const [name, setName] = useState("pc");
-  const [url, setUrl] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState<ApiError | null>(null);
-  const [guide, setGuide] = useState(false);
-
-  async function add() {
-    setBusy(true);
-    setErr(null);
-    try {
-      const h = await api.setHost(name.trim().toLowerCase(), url.trim());
-      setUrl("");
-      toast(`${h.name} connected`, `${h.models.length} model${h.models.length === 1 ? "" : "s"} on it are now in the model menu.`);
-      void hosts.reload();
-      onChanged();
-    } catch (e) {
-      setErr(e instanceof ApiError ? e : new ApiError(0, String(e)));
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function remove(n: string) {
-    try {
-      await api.removeHost(n);
-      toast(`${n} removed`);
-      void hosts.reload();
-      onChanged();
-    } catch (e) {
-      toast(e instanceof ApiError ? e.message : "Couldn't remove it");
-    }
-  }
-
-  return (
-    <section>
-      <PanelTitle title="Computers on your network"
-        hint="Run models on another computer's GPU (e.g. a gaming PC) over your home network. Still private: nothing goes to the internet." />
-      <div className="glass-inset space-y-3 rounded-2xl p-3">
-        {/* connected computers */}
-        {hosts.data?.map((h) => (
-          <div key={h.name} className="flex items-center gap-3 rounded-xl border border-white/[0.07] bg-white/[0.025] px-3 py-2.5">
-            <div className={clsx("grid size-9 shrink-0 place-items-center rounded-lg",
-              h.online ? "bg-seafoam/[0.12] text-seafoam" : "bg-white/[0.05] text-mist")}>
-              <MonitorSmartphone className="size-4" />
-            </div>
-            <div className="min-w-0 flex-1">
-              <div className="flex items-center gap-1.5">
-                <span className="truncate text-sm font-medium text-frost">{h.name}</span>
-                <Chip tone={h.online ? "seafoam" : "coral"}>{h.online ? "online" : "offline"}</Chip>
-                {h.online && <Chip>{h.models.length} models</Chip>}
-              </div>
-              <div className="truncate font-mono text-[11px] text-mist">{h.url}</div>
-              {!h.online && <p className="mt-0.5 text-[11px] leading-snug text-mist">Turn it on and open Ollama there. It reconnects by itself.</p>}
-            </div>
-            <JiggleButton tone="ghost" className="size-8 shrink-0 rounded-lg p-0!" aria-label={`Remove ${h.name}`} onClick={() => void remove(h.name)}>
-              <Trash2 className="size-3.5 shrink-0" />
-            </JiggleButton>
-          </div>
-        ))}
-
-        {/* add a computer */}
-        <form className="space-y-3 rounded-xl border border-white/[0.07] bg-white/[0.025] p-3"
-          onSubmit={(e) => { e.preventDefault(); if (url.trim() && name.trim()) void add(); }}>
-          <div className="text-xs font-medium text-frost">
-            {hosts.data?.length ? "Add another computer" : "Add a computer"}
-          </div>
-          <div className="grid grid-cols-[minmax(0,2fr)_minmax(0,5fr)] gap-2.5">
-            <label className="block min-w-0">
-              <span className="mb-1.5 block text-[11px] font-medium text-mist">Name</span>
-              <input value={name} onChange={(e) => setName(e.target.value)} spellCheck={false} autoComplete="off"
-                className={clsx(inputClass, "h-10")} placeholder="pc" />
-            </label>
-            <label className="block min-w-0">
-              <span className="mb-1.5 block text-[11px] font-medium text-mist">Address</span>
-              <input value={url} onChange={(e) => setUrl(e.target.value)} spellCheck={false} autoComplete="off" inputMode="url"
-                onFocus={(e) => e.currentTarget.select()} /* a paste replaces the old text instead of adding to it */
-                className={clsx(inputClass, "h-10 font-mono")} placeholder="192.168.1.9" />
-            </label>
-          </div>
-          <p className="text-[11px] leading-snug text-mist">
-            The address the setup script printed (or <span className="font-mono">ipconfig</span> on the PC). Port 11434 is added for
-            you. Its models appear as <span className="font-mono text-frost/80">model@{name.trim().toLowerCase() || "pc"}</span>.
-          </p>
-          <JiggleButton type="submit" tone="primary" className="h-10 w-full rounded-xl"
-            disabled={busy || !url.trim() || !name.trim()}>
-            {busy ? <><RefreshCw className="size-3.5 animate-spin" /> Checking…</> : <><Plug className="size-3.5" /> Connect</>}
-          </JiggleButton>
-          {err && <ErrorNote message={err.message} hint={err.hint} />}
-        </form>
-
-        {/* setup guide */}
-        <button type="button" onClick={() => setGuide((g) => !g)} aria-expanded={guide}
-          className="flex w-full items-center justify-between rounded-lg px-1 text-[11.5px] text-glacier hover:text-frost">
-          How to set up a Windows PC (RTX GPU)
-          <span aria-hidden>{guide ? "−" : "+"}</span>
-        </button>
-        {guide && (
-          <ol className="list-decimal space-y-2 pl-5 text-[11px] leading-relaxed text-frost/85">
-            <li>On the PC, install the latest Ollama from <span className="font-mono text-glacier">ollama.com</span> (recent versions support RTX 50-series GPUs).</li>
-            <li>Open PowerShell with <i>Run as administrator</i> and download the setup script:
-              <code className="mt-1 block break-all rounded-lg bg-black/30 px-2 py-1.5 font-mono text-[10.5px] text-glacier">Invoke-WebRequest https://raw.githubusercontent.com/Piyuz-ui/aether/main/pc/setup-ollama-pc.ps1 -OutFile &quot;$env:USERPROFILE\Downloads\setup-ollama-pc.ps1&quot;</code>
-            </li>
-            <li>Run it:
-              <code className="mt-1 block break-all rounded-lg bg-black/30 px-2 py-1.5 font-mono text-[10.5px] text-glacier">powershell -ExecutionPolicy Bypass -File &quot;$env:USERPROFILE\Downloads\setup-ollama-pc.ps1&quot;</code>
-              It shares Ollama on your home network only, opens port 11434 for private networks, downloads models for a 16 GB GPU and prints the PC&apos;s address.</li>
-            <li>Enter that address above and press Connect.</li>
-          </ol>
-        )}
       </div>
     </section>
   );
