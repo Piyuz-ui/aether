@@ -21,7 +21,8 @@ from typing import Any
 from .embedder import Embedder
 from .store import Store, to_blob
 
-SUPPORTED = {".pdf", ".md", ".markdown", ".txt"}
+SUPPORTED = {".pdf", ".md", ".markdown", ".txt", ".pptx"}
+SLIDE_FORMATS = {".pptx"}
 CHUNK_CHARS = 1000
 OVERLAP_CHARS = 180
 RRF_K = 60
@@ -42,16 +43,67 @@ class Hit:
     semantic: float | None = None
 
     def cite(self) -> str:
-        return f"{self.filename} p.{self.page}"
+        unit = "slide" if Path(self.filename).suffix.lower() in SLIDE_FORMATS else "p."
+        return f"{self.filename} {unit}{' ' if unit == 'slide' else ''}{self.page}"
 
 
 class KnowledgeError(ValueError):
     pass
 
 
+def _shape_text(shape) -> list[str]:  # noqa: ANN001 - python-pptx shape
+    """All text in a shape, including grouped shapes and tables."""
+    out: list[str] = []
+    if getattr(shape, "shape_type", None) == 6 or hasattr(shape, "shapes"):  # group
+        for inner in getattr(shape, "shapes", []):
+            out += _shape_text(inner)
+        return out
+    if getattr(shape, "has_table", False) and shape.has_table:
+        for row in shape.table.rows:
+            cells = [" ".join(c.text.split()) for c in row.cells]
+            if any(cells):
+                out.append(" | ".join(cells))
+        return out
+    if getattr(shape, "has_text_frame", False) and shape.has_text_frame:
+        for para in shape.text_frame.paragraphs:
+            text = "".join(run.text for run in para.runs).strip() or para.text.strip()
+            if text:
+                out.append(("  " * para.level + "- " if para.level else "") + text)
+    return out
+
+
+def read_slides(path: Path) -> list[str]:
+    """One 'page' per slide: title, body text, tables and speaker notes."""
+    try:
+        from pptx import Presentation
+        deck = Presentation(str(path))
+    except Exception as e:
+        raise KnowledgeError(f"Couldn't read the PowerPoint file: {type(e).__name__}: {e}") from e
+    slides: list[str] = []
+    for number, slide in enumerate(deck.slides, 1):
+        title_shape = slide.shapes.title
+        title = title_shape.text.strip() if title_shape is not None and title_shape.has_text_frame else ""
+        lines = [f"Slide {number}: {title}" if title else f"Slide {number}"]
+        for shape in slide.shapes:
+            if title_shape is not None and shape.shape_id == title_shape.shape_id:
+                continue
+            lines += _shape_text(shape)
+        if slide.has_notes_slide:
+            notes = slide.notes_slide.notes_text_frame.text.strip() if slide.notes_slide.notes_text_frame else ""
+            if notes:
+                lines.append(f"Speaker notes: {notes}")
+        slides.append("\n".join(lines))
+    return slides
+
+
 def read_pages(path: Path) -> list[str]:
-    """Text per page (PDF) or one 'page' for a text file."""
+    """Text per page (PDF), per slide (PowerPoint), or one 'page' for a text file."""
     suffix = path.suffix.lower()
+    if suffix in SLIDE_FORMATS:
+        return read_slides(path)
+    if suffix == ".ppt":
+        raise KnowledgeError("Old .ppt files can't be read. Open it in PowerPoint or Keynote "
+                             "and save it as .pptx.")
     if suffix == ".pdf":
         from pypdf import PdfReader
         try:
@@ -146,8 +198,13 @@ class KnowledgeBase:
     def register(self, source: Path, *, filename: str | None = None) -> tuple[dict[str, Any], bool]:
         """Copy a file into the vault and create its row. Returns (document, is_new)."""
         name = Path(filename or source.name).name
-        if Path(name).suffix.lower() not in SUPPORTED:
-            raise KnowledgeError(f"'{name}' isn't supported. Use PDF, Markdown or TXT.")
+        suffix = Path(name).suffix.lower()
+        if suffix == ".ppt":
+            raise KnowledgeError(f"'{name}' is an old .ppt file. Save it as .pptx first "
+                                 "(PowerPoint or Keynote: File → Save As / Export).")
+        if suffix not in SUPPORTED:
+            raise KnowledgeError(f"'{name}' isn't supported. Use PDF, PowerPoint (.pptx), "
+                                 "Markdown or TXT.")
         digest = hashlib.sha256(source.read_bytes()).hexdigest()
         existing = self.store.one("SELECT * FROM documents WHERE sha256 = ?", (digest,))
         if existing:

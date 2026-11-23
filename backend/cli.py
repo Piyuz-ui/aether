@@ -58,7 +58,7 @@ HELP = """\
 
 | | |
 |---|---|
-| `/ingest <file…>` | add PDFs / Markdown / text to the knowledge vault (drag files in) |
+| `/ingest <file…>` | add PDFs / PowerPoint (.pptx) / Markdown / text to the knowledge vault |
 | `/docs` | list the knowledge vault |
 | `/memory` | what AETHER remembers about you · `/forget <id>` deletes one |
 | `/tasks` · `/timetable` | your deadlines and weekly classes |
@@ -374,7 +374,7 @@ class CLI:
         except ValueError:
             paths = [Path(arg).expanduser()]
         if not paths:
-            console.print(Text("Usage: /ingest <file> [more files…]  (PDF, MD or TXT)", style="warn"))
+            console.print(Text("Usage: /ingest <file> [more files…]  (PDF, PPTX, MD or TXT)", style="warn"))
             return
         for path in paths:
             if not path.is_file():
@@ -392,7 +392,8 @@ class CLI:
                     console.print(Text(f"  ✗ {path.name}: {e}", style="danger"))
                     continue
             if doc.get("status") == "ready":
-                console.print(Text(f"  ✓ {doc['filename']}: {doc['pages']} pages, "
+                unit = "slides" if doc["filename"].lower().endswith(".pptx") else "pages"
+                console.print(Text(f"  ✓ {doc['filename']}: {doc['pages']} {unit}, "
                                    f"{doc['chunks']} passages indexed", style="seafoam"))
                 if doc.get("error"):
                     console.print(Text(f"    {doc['error']}", style="warn"))

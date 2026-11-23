@@ -5,6 +5,6 @@ engine → tools) always find them, even while this package is still initialisin
 """
 from .registry import REGISTRY, Risk, ToolError, ToolRegistry, ToolResult, ToolSpec, tool
 
-from . import calculator, knowledge, memory_tools, notes, planner, system, web  # noqa: E402,F401,I001
+from . import calculator, documents, knowledge, memory_tools, notes, planner, system, web  # noqa: E402,F401,I001
 
 __all__ = ["REGISTRY", "Risk", "ToolError", "ToolRegistry", "ToolResult", "ToolSpec", "tool"]

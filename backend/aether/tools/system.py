@@ -52,6 +52,24 @@ async def _run(argv: list[str], *, stdin: bytes | None = None) -> tuple[int, str
     return proc.returncode or 0, out.decode(errors="replace")
 
 
+def _finish(code: int, out: str, hint: str = "") -> str:
+    """A non-zero exit is a FAILURE, so the agent (and the UI) can't mistake a crash for success."""
+    body = _clip(out.strip()) or "(no output)"
+    if code != 0:
+        raise ToolError(f"Failed with exit code {code}.\n{body}" + (f"\n\nHint: {hint}" if hint else ""))
+    return f"exit code 0\n{body}"
+
+
+def _python_hint(out: str) -> str:
+    m = re.search(r"No module named '([\w.]+)'", out)
+    if not m:
+        return ""
+    if m.group(1).split(".")[0] in {"pdfkit", "reportlab", "fpdf", "weasyprint", "docx2pdf"}:
+        return "To make a PDF, use the create_pdf tool instead of Python."
+    return (f"'{m.group(1)}' isn't installed. Use only the standard library, or a dedicated "
+            "AETHER tool if one fits.")
+
+
 # ----------------------------------------------------------------- run_python
 def _python_summary(args: dict[str, Any]) -> str:
     code = str(args.get("code", ""))
@@ -73,7 +91,7 @@ def _python_summary(args: dict[str, Any]) -> str:
 async def run_python(code: str) -> str:
     # -I: isolated mode (ignores env vars and user site-packages, keeps cwd off sys.path).
     code_rc, out = await _run([sys.executable, "-I", "-"], stdin=code.encode())
-    return f"exit code {code_rc}\n{_clip(out.strip()) or '(no output)'}"
+    return _finish(code_rc, out, hint=_python_hint(out))
 
 
 # ----------------------------------------------------------- run_shell_command
@@ -95,7 +113,7 @@ def _shell_summary(args: dict[str, Any]) -> str:
 async def run_shell_command(command: str) -> str:
     shell = shutil.which("zsh") or shutil.which("bash") or "/bin/sh"
     code, out = await _run([shell, "-c", command])
-    return f"exit code {code}\n{_clip(out.strip()) or '(no output)'}"
+    return _finish(code, out)
 
 
 # ----------------------------------------------------------------- delete_file

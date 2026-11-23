@@ -18,9 +18,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
 
-from fastapi import FastAPI, File, HTTPException, Request, UploadFile
+from fastapi import FastAPI, File, HTTPException, Request, Response, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
+from fastapi.responses import FileResponse
 from sse_starlette.sse import EventSourceResponse
 
 from aether import __version__
@@ -31,7 +32,8 @@ from aether.memory import MemorySystem
 from aether.memory.knowledge import KnowledgeError
 from aether.memory.taskbook import TaskError
 from aether.tools import REGISTRY
-from aether.tools.context import set_memory
+from aether.tools.context import set_memory, workspace
+from aether.workspace import WorkspaceError
 
 
 # ----------------------------------------------------------------- app state
@@ -147,6 +149,13 @@ def create_app(settings: Settings | None = None, *, llm: Any = None,
         return request.app.state.ctx
 
     # ------------------------------------------------------------ system
+    @app.get("/", include_in_schema=False)
+    async def root() -> dict[str, str]:
+        """People often open the API address in a browser; point them to the right places."""
+        return {"name": "AETHER API", "status": "running",
+                "app": "Open the web app at http://localhost:3000",
+                "docs": f"Interactive API docs at http://{settings.api_host}:{settings.api_port}/docs"}
+
     @app.get("/api/health")
     async def health(request: Request) -> dict[str, Any]:
         ctx = ctx_of(request)
@@ -324,6 +333,26 @@ def create_app(settings: Settings | None = None, *, llm: Any = None,
             raise HTTPException(404, detail={"message": "No such class."})
         return {"deleted": class_id}
 
+    @app.get("/api/files/{path:path}")
+    async def workspace_file(path: str, download: bool = False) -> FileResponse:
+        """Serve a file the agent created (PDF, note…). Only inside the workspace."""
+        try:
+            target = workspace().resolve(path, must_exist=True)
+        except WorkspaceError as e:
+            raise HTTPException(404, detail={"message": str(e)}) from e
+        if not target.is_file():
+            raise HTTPException(404, detail={"message": "That's a folder, not a file."})
+        return FileResponse(target, filename=target.name,
+                            content_disposition_type="attachment" if download else "inline")
+
+    @app.get("/api/calendar.ics")
+    async def calendar(request: Request) -> Response:
+        """Deadlines and weekly classes as an iCalendar file (Apple/Google Calendar import)."""
+        mem = ctx_of(request).memory
+        body = to_ics(mem.tasks.list(), mem.tasks.classes())
+        return Response(body, media_type="text/calendar; charset=utf-8",
+                        headers={"Content-Disposition": 'attachment; filename="aether-deadlines.ics"'})
+
     # ---------------------------------------------------- knowledge vault
     @app.get("/api/knowledge")
     async def knowledge(request: Request) -> list[dict[str, Any]]:
@@ -381,6 +410,54 @@ def create_app(settings: Settings | None = None, *, llm: Any = None,
                  "semantic": h.semantic, "doc_id": h.doc_id} for h in hits]
 
     return app
+
+
+def _ics_text(value: str) -> str:
+    return (value.replace("\\", "\\\\").replace(";", "\\;").replace(",", "\\,")
+            .replace("\n", "\\n"))
+
+
+def to_ics(tasks: list[dict[str, Any]], classes: list[dict[str, Any]]) -> str:
+    """Build an RFC 5545 calendar: dated tasks become events with alarms, and classes
+    become weekly repeating events starting from their next occurrence."""
+    from datetime import date as _date, datetime as _dt, timedelta as _td, timezone as _tz
+
+    stamp = _dt.now(_tz.utc).strftime("%Y%m%dT%H%M%SZ")
+    lines = ["BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//AETHER//Local agent//EN",
+             "CALSCALE:GREGORIAN", "X-WR-CALNAME:AETHER"]
+    for t in tasks:
+        if not t.get("due"):
+            continue
+        summary = f"[{t['kind'].capitalize()}] {t['title']}"
+        lines += ["BEGIN:VEVENT", f"UID:aether-task-{t['id']}@aether.local", f"DTSTAMP:{stamp}",
+                  f"SUMMARY:{_ics_text(summary)}"]
+        if "T" in t["due"]:
+            start = _dt.fromisoformat(t["due"])
+            lines += [f"DTSTART:{start:%Y%m%dT%H%M%S}", f"DTEND:{start + _td(hours=1):%Y%m%dT%H%M%S}"]
+            trigger = "-PT1H"
+        else:
+            day = _date.fromisoformat(t["due"])
+            lines += [f"DTSTART;VALUE=DATE:{day:%Y%m%d}", f"DTEND;VALUE=DATE:{day + _td(days=1):%Y%m%d}"]
+            trigger = "-P1D"
+        if t.get("notes"):
+            lines.append(f"DESCRIPTION:{_ics_text(t['notes'])}")
+        lines += ["BEGIN:VALARM", "ACTION:DISPLAY", f"DESCRIPTION:{_ics_text(summary)}",
+                  f"TRIGGER:{trigger}", "END:VALARM", "END:VEVENT"]
+    byday = ["MO", "TU", "WE", "TH", "FR", "SA", "SU"]
+    today = _date.today()
+    for c in classes:
+        first = today + _td(days=(c["weekday"] - today.weekday()) % 7)
+        sh, sm = map(int, c["start"].split(":"))
+        eh, em = map(int, c["end"].split(":"))
+        lines += ["BEGIN:VEVENT", f"UID:aether-class-{c['id']}@aether.local", f"DTSTAMP:{stamp}",
+                  f"SUMMARY:{_ics_text(c['course'])}",
+                  f"DTSTART:{first:%Y%m%d}T{sh:02d}{sm:02d}00", f"DTEND:{first:%Y%m%d}T{eh:02d}{em:02d}00",
+                  f"RRULE:FREQ=WEEKLY;BYDAY={byday[c['weekday']]}"]
+        if c.get("location"):
+            lines.append(f"LOCATION:{_ics_text(c['location'])}")
+        lines.append("END:VEVENT")
+    lines.append("END:VCALENDAR")
+    return "\r\n".join(lines) + "\r\n"
 
 
 def transcript(turns: list[list[dict[str, Any]]]) -> list[dict[str, Any]]:

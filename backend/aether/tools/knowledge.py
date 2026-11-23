@@ -6,9 +6,10 @@ from .registry import ToolError, tool
 
 
 @tool(description=(
-    "Search the user's uploaded documents and notes (PDFs, Markdown) by meaning and keywords. "
-    "Use this FIRST for any question about their course material, syllabus, slides or notes. "
-    "Answer from the returned passages and cite them as [file p.N]."),
+    "Search the user's uploaded documents (PDFs, PowerPoint slides, Markdown notes) by meaning "
+    "and keywords. Use this FIRST for any question about their course material, syllabus, "
+    "slides or notes. Answer from the returned passages and cite them exactly as shown, e.g. "
+    "[notes.pdf p.3] or [lecture.pptx slide 5]."),
     params={"query": "What to look for. A short natural-language question works best",
             "document": "Only search this document (file name or a unique part of it). "
                         "Empty = all documents",

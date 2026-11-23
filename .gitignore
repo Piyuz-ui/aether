@@ -22,3 +22,8 @@ backend/data/
 backend/workspace/
 frontend/node_modules/
 frontend/.next/
+
+# Next.js generated
+frontend/next-env.d.ts
+frontend/*.tsbuildinfo
+frontend/.env.local

@@ -162,3 +162,56 @@ def test_ollama_errors_reach_the_stream_with_hints(make_client):
         events = list(sse_events(r))
     err = next(d for e, d in events if e == "error")["data"]
     assert err["hint"] == "Restart it."
+
+
+def test_calendar_export(make_client):
+    c = make_client()
+    c.post("/api/tasks", json={"title": "DBMS, exam", "kind": "exam", "due": "2026-12-04 17:00"})
+    c.post("/api/tasks", json={"title": "Lab record", "kind": "deadline", "due": "2026-12-07"})
+    c.post("/api/tasks", json={"title": "no date"})
+    c.post("/api/timetable", json={"course": "Statistics", "day": "Wed", "start": "10am", "end": "11am",
+                                   "location": "Room 2"})
+    r = c.get("/api/calendar.ics")
+    assert r.status_code == 200 and r.headers["content-type"].startswith("text/calendar")
+    ics = r.text
+    assert ics.startswith("BEGIN:VCALENDAR") and ics.rstrip().endswith("END:VCALENDAR")
+    assert "SUMMARY:[Exam] DBMS\\, exam" in ics and "DTSTART:20261204T170000" in ics
+    assert "DTSTART;VALUE=DATE:20261207" in ics and "TRIGGER:-P1D" in ics
+    assert "RRULE:FREQ=WEEKLY;BYDAY=WE" in ics and "LOCATION:Room 2" in ics
+    assert ics.count("BEGIN:VEVENT") == 3 and "\r\n" in ics
+
+
+def test_workspace_files_are_served_and_jailed(make_client):
+    c = make_client()
+    workspace().resolve("exports").mkdir(exist_ok=True)
+    workspace().resolve("exports/report.pdf").write_bytes(b"%PDF-1.4 test")
+    r = c.get("/api/files/exports/report.pdf")
+    assert r.status_code == 200 and r.content == b"%PDF-1.4 test"
+    assert r.headers["content-disposition"].startswith("inline")
+    assert c.get("/api/files/exports/report.pdf?download=true").headers["content-disposition"].startswith("attachment")
+    for bad in ["../../../../etc/passwd", "%2e%2e/%2e%2e/etc/passwd", "exports/missing.pdf", "exports"]:
+        assert c.get(f"/api/files/{bad}").status_code == 404, bad
+
+
+def test_root_points_people_to_the_app(make_client):
+    body = make_client().get("/").json()
+    assert body["status"] == "running" and "localhost:3000" in body["app"]
+
+
+def test_pptx_upload_through_the_api(make_client, tmp_path):
+    from .test_pptx import make_deck
+    c = make_client()
+    deck = make_deck(tmp_path / "unit3.pptx")
+    with deck.open("rb") as fh:
+        r = c.post("/api/knowledge", files=[("files", ("unit3.pptx", fh,
+                   "application/vnd.openxmlformats-officedocument.presentationml.presentation"))])
+    assert r.status_code == 202
+    import time
+    for _ in range(100):
+        doc = c.get("/api/knowledge").json()[0]
+        if doc["status"] in {"ready", "error"}:
+            break
+        time.sleep(0.02)
+    assert doc["status"] == "ready" and doc["pages"] == 3
+    old = c.post("/api/knowledge", files=[("files", ("old.ppt", b"legacy", "application/vnd.ms-powerpoint"))])
+    assert old.status_code == 422 and ".pptx" in old.json()["detail"]["message"]
