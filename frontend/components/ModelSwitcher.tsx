@@ -6,11 +6,11 @@
  */
 import clsx from "clsx";
 import { AnimatePresence, motion } from "framer-motion";
-import { Check, ChevronDown, Cloud, Cpu, Eye, ShieldCheck } from "lucide-react";
+import { Check, ChevronDown, Cloud, Cpu, Eye, MonitorSmartphone, ShieldCheck } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
 import { api, ApiError } from "@/lib/api";
-import { cloudProvider, modelName } from "@/lib/cloud";
+import { cloudProvider, modelName, remoteHost } from "@/lib/cloud";
 import { jelly } from "@/lib/motion";
 import type { ModelList } from "@/lib/types";
 
@@ -65,8 +65,10 @@ export function ModelSwitcher({ current, disabled, onSwitched, toast, onOpenSett
       await api.setModel(model);
       onSwitched(model);
       const cloud = cloudProvider(model);
+      const host = remoteHost(model);
       toast("Brain switched", cloud
         ? `Now thinking with ${modelName(model)} on ${cloud}. Your messages go to ${cloud} while it's selected.`
+        : host ? `Now thinking with ${modelName(model)} on ${host}, over your own network`
         : `Now thinking with ${model}, on this Mac`);
       setOpen(false);
     } catch (e) {
@@ -81,6 +83,8 @@ export function ModelSwitcher({ current, disabled, onSwitched, toast, onOpenSett
   const cloud = data?.cloud?.filter((p) => p.configured) ?? [];
   const unset = data?.cloud?.filter((p) => !p.configured) ?? [];
   const currentCloud = cloudProvider(current);
+  const currentHost = remoteHost(current);
+  const hosts = data?.hosts ?? [];
 
   const row = (id: string, label: string, extra?: React.ReactNode) => (
     <motion.button
@@ -111,11 +115,12 @@ export function ModelSwitcher({ current, disabled, onSwitched, toast, onOpenSett
         transition={jelly}
         aria-haspopup="listbox"
         aria-expanded={open}
-        aria-label={`Model: ${current ?? "unknown"}${currentCloud ? ` (cloud, ${currentCloud})` : ""}. Change model`}
+        aria-label={`Model: ${current ?? "unknown"}${currentCloud ? ` (cloud, ${currentCloud})` : currentHost ? ` (on ${currentHost})` : ""}. Change model`}
         title={disabled ? "Finish the current answer to switch models" : undefined}
         className="-mx-1 inline-flex items-center gap-1 rounded-lg px-1 py-0.5 font-mono text-[11.5px] text-frost/80 transition-colors hover:bg-white/[0.07] hover:text-frost disabled:pointer-events-none"
       >
         {currentCloud && <Cloud className="size-3 text-periwinkle" aria-hidden />}
+        {currentHost && <MonitorSmartphone className="size-3 text-seafoam" aria-hidden />}
         {current ? modelName(current) : "no model"}
         <motion.span animate={{ rotate: open ? 180 : 0 }} transition={jelly}>
           <ChevronDown className="size-3 text-mist" />
@@ -147,6 +152,22 @@ export function ModelSwitcher({ current, disabled, onSwitched, toast, onOpenSett
                   {local?.map((m) => row(m, m))}
                 </>
               )}
+              {hosts.map((h) => (
+                <div key={h.name}>
+                  <GroupLabel icon={<MonitorSmartphone className="size-3" />}
+                    badge={<span className={clsx("inline-flex items-center gap-0.5 normal-case tracking-normal", h.online ? "text-seafoam" : "text-coral")}>
+                      {h.online ? <><ShieldCheck className="size-3" />your network</> : "offline"}</span>}>
+                    On {h.name}
+                  </GroupLabel>
+                  {!h.online && <div className="px-2.5 py-1 text-[11px] text-mist">Turn it on and open Ollama there.</div>}
+                  {h.online && h.models.length === 0 && (
+                    <div className="px-2.5 py-1 text-[11px] text-mist">No models yet. On {h.name}, run <code className="font-mono text-glacier">ollama pull qwen3:14b</code></div>
+                  )}
+                  {h.models.map((m) => row(m.id, m.name, m.vision
+                    ? <Eye className="size-3 shrink-0 text-mist" aria-label="can see images" />
+                    : undefined))}
+                </div>
+              ))}
               {cloud.map((p) => (
                 <div key={p.id}>
                   <GroupLabel icon={<Cloud className="size-3" />}
@@ -166,14 +187,22 @@ export function ModelSwitcher({ current, disabled, onSwitched, toast, onOpenSett
                   Cloud brain: your messages, and any memories or document passages AETHER adds to them, are
                   sent to {currentCloud}. Pick a model under “On this Mac” to stay fully local.
                 </p>
+              ) : currentHost ? (
+                <p>Running on {currentHost} over your own network. Nothing leaves your network.</p>
               ) : (
                 <p>
                   Add local models with <code className="font-mono text-glacier">ollama pull &lt;name&gt;</code>.
                 </p>
               )}
+              {hosts.length === 0 && (
+                <button type="button" onClick={() => { setOpen(false); onOpenSettings?.(); }}
+                  className="block text-left text-glacier underline-offset-2 hover:underline">
+                  + Use a GPU PC on your network
+                </button>
+              )}
               {unset.length > 0 && (
                 <button type="button" onClick={() => { setOpen(false); onOpenSettings?.(); }}
-                  className="text-left text-glacier underline-offset-2 hover:underline">
+                  className="block text-left text-glacier underline-offset-2 hover:underline">
                   + Add a cloud brain ({unset.filter((p) => p.free).length} free, {unset.filter((p) => !p.free).length} paid to choose from)
                 </button>
               )}

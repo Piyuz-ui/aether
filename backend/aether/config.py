@@ -39,6 +39,9 @@ class Settings(BaseSettings):
     tool_call_grace_s: float = 2.5
     think: bool = False              # let reasoning models think out loud (shown live)
     request_timeout_s: float = 300.0
+    # Other computers running Ollama on your network, e.g. a GPU PC: {"pc": "http://192.168.1.50:11434"}.
+    # Their models appear as "<model>@<name>". Set in Settings, or as JSON in AETHER_OLLAMA_HOSTS.
+    ollama_hosts: dict[str, str] = Field(default_factory=dict)
 
     # --- optional cloud brains (off unless a key is set; see .env.example) ---------
     gemini_api_key: SecretStr = _key("GEMINI_API_KEY", "GOOGLE_API_KEY")

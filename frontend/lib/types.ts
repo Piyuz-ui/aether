@@ -108,6 +108,17 @@ export type Health = {
   context_length: number;
   cloud?: boolean;
   provider?: string | null;
+  /** Set when the model runs on another computer on your network (e.g. "pc"). */
+  host?: string | null;
+};
+
+export type HostModel = { id: string; name: string; vision: boolean; tools: boolean };
+export type NetworkHost = {
+  name: string;
+  url: string;
+  online: boolean;
+  models: HostModel[];
+  error: { message: string; hint?: string } | null;
 };
 
 export type CloudModel = { id: string; name: string; vision: boolean; context: number };
@@ -128,6 +139,7 @@ export type ModelList = {
   current: string;
   local_error?: { message: string; hint?: string } | null;
   cloud?: CloudProvider[];
+  hosts?: NetworkHost[];
 };
 
 export type Task = {

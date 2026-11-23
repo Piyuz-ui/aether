@@ -301,13 +301,17 @@ class CLI:
                 except OllamaError as e:
                     console.print(Text(f"{e.message} → {e.hint}", style="danger"))
                     return True
+                hosts_fn = getattr(self.agent.llm, "hosts_catalog", None)
+                for h in (await hosts_fn() if hosts_fn else []):
+                    models += [m["id"] for m in h["models"]]
                 catalog = getattr(self.agent.llm, "catalog", None)
                 for p in (await catalog() if catalog else []):
                     if p["configured"]:
                         models += [m["id"] for m in p["models"]]
                 for m in models:
                     mark = "◉" if m == self.agent.model else "○"
-                    cloud = "  [cloud]" if split_model(m)[0] else ""
+                    cloud = "  [cloud]" if split_model(m)[0] else (
+                        "  [network]" if "@" in m and not m.split("@")[-1].count(":") else "")
                     console.print(Text(f" {mark} {m}{cloud}", style="glacier" if mark == "◉" else "mist"))
         elif cmd == "mcp":
             if arg == "reload":

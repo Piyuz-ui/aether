@@ -9,7 +9,7 @@ import { AnimatePresence, motion } from "framer-motion";
 import { Check, ChevronDown, Cloud, Cpu, X, Zap } from "lucide-react";
 import { useState } from "react";
 
-import { cloudProvider, modelName } from "@/lib/cloud";
+import { cloudProvider, modelName, remoteHost } from "@/lib/cloud";
 import { jelly } from "@/lib/motion";
 import type { AssistantMessage, ToolStep } from "@/lib/types";
 
@@ -19,6 +19,7 @@ export function TelemetryChip({ m }: { m: AssistantMessage }) {
   const [open, setOpen] = useState(false);
   const s = m.stats;
   const cloud = cloudProvider(s?.model);
+  const host = remoteHost(s?.model);
   const tools = m.steps.filter((x): x is ToolStep => x.kind === "tool");
   if (!s && !tools.length) return null;
 
@@ -55,7 +56,7 @@ export function TelemetryChip({ m }: { m: AssistantMessage }) {
         <span className="text-mist/50">·</span>
         {cloud
           ? <span className="shrink-0 text-amber">cloud · {cloud}</span>
-          : <span className="shrink-0 text-seafoam">local</span>}
+          : <span className="shrink-0 text-seafoam">{host ? `local · ${host}` : "local"}</span>}
         <motion.span animate={{ rotate: open ? 180 : 0 }} transition={jelly} className="shrink-0">
           <ChevronDown className="size-3" />
         </motion.span>
@@ -107,7 +108,9 @@ export function TelemetryChip({ m }: { m: AssistantMessage }) {
                   <div className="flex items-center gap-1.5 text-mist/80">
                     {cloud
                       ? <><Cloud className="size-3" /> {modelName(s.model)} · ran on {cloud}&apos;s servers</>
-                      : <><Cpu className="size-3" /> {s.model} · running locally via Ollama</>}
+                      : host
+                        ? <><Cpu className="size-3" /> {modelName(s.model)} · ran on {host} (your network) via Ollama</>
+                        : <><Cpu className="size-3" /> {s.model} · running locally via Ollama</>}
                   </div>
                 </>
               )}

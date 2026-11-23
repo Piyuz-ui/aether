@@ -13,8 +13,17 @@ export function cloudProvider(model?: string | null): string | null {
   return CLOUD_LABELS[model.slice(0, i)] ?? null;
 }
 
-/** "gemini:gemini-2.5-flash" → "gemini-2.5-flash"; local names are unchanged. */
+/** The network computer a model runs on ("qwen3:14b@pc" → "pc"), or null. */
+export function remoteHost(model?: string | null): string | null {
+  if (!model || cloudProvider(model)) return null;
+  const m = /@([a-z][a-z0-9-]{0,23})$/.exec(model);
+  return m ? m[1] : null;
+}
+
+/** The model's own name: "gemini:gemini-2.5-flash" → "gemini-2.5-flash", "qwen3:14b@pc" → "qwen3:14b". */
 export function modelName(model?: string | null): string {
   if (!model) return "";
-  return cloudProvider(model) ? model.slice(model.indexOf(":") + 1) : model;
+  if (cloudProvider(model)) return model.slice(model.indexOf(":") + 1);
+  const host = remoteHost(model);
+  return host ? model.slice(0, -(host.length + 1)) : model;
 }

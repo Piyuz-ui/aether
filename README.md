@@ -12,7 +12,7 @@
 ![Ollama](https://img.shields.io/badge/LLM-Ollama%20(local)-7DD3FC)
 ![MCP](https://img.shields.io/badge/MCP-client-A5B4FC)
 ![Voice](https://img.shields.io/badge/Voice-Kokoro--82M-5EEAD4)
-![Tests](https://img.shields.io/badge/tests-179%20passing-5EEAD4)
+![Tests](https://img.shields.io/badge/tests-188%20passing-5EEAD4)
 ![Privacy](https://img.shields.io/badge/data-local%20by%20default-0E2442)
 [![License: MIT](https://img.shields.io/badge/license-MIT-F0F9FF)](LICENSE)
 
@@ -154,6 +154,22 @@ cd backend && python -m pytest -q
 </details>
 
 <details>
+<summary><b>Use a GPU PC on your network (e.g. RTX 5080)</b></summary>
+
+AETHER can run models on another computer's GPU over your home network. Your data stays private, because nothing goes to the internet. On the Windows PC:
+
+1. Install the latest [Ollama](https://ollama.com/download). Recent versions support RTX 50-series cards.
+2. Copy [`pc/setup-ollama-pc.ps1`](pc/setup-ollama-pc.ps1) to the PC. Open PowerShell with **Run as administrator** and run:
+   ```powershell
+   powershell -ExecutionPolicy Bypass -File setup-ollama-pc.ps1
+   ```
+   The script asks before each change. It makes Ollama listen on your network, opens port 11434 for **private** networks only, downloads models that fit 16 GB (`qwen3:14b`, `gpt-oss:20b`, `qwen3-vl:8b`), and prints the PC's address.
+3. On the Mac, open **Settings → Computers on your network**, type the address and press **Connect**.
+
+The PC's models then appear in the model menu as `model@pc`, and telemetry shows `local · pc`. If the PC is off, AETHER falls back to the Mac's models. Images can also be routed to a vision model on the PC. Embeddings and memory stay on the Mac. Ollama has no password, so never forward port 11434 on your router. To use the PC away from home, put both machines on a private VPN such as [Tailscale](https://tailscale.com) and use the PC's VPN address. You can also set hosts in `backend/.env`: `AETHER_OLLAMA_HOSTS={"pc": "http://192.168.1.50:11434"}`.
+</details>
+
+<details>
 <summary><b>Add cloud brains (optional)</b></summary>
 
 Local models are always the default. To add a cloud model, open **Settings → Cloud brains**, paste a key and press **Connect**. AETHER checks the key with the provider, then saves it to `backend/.env` (gitignored, readable only by you). You can also put the key in `backend/.env` yourself:
@@ -209,7 +225,7 @@ Set these in `backend/.env` (see `.env.example`):
 ```
 backend/
   aether/engine/     ReAct loop, safety broker, prompts, sessions
-  aether/llm/        async Ollama client, optional cloud providers + model router, tool-call repair parser
+  aether/llm/        Ollama client, network GPU hosts, optional cloud providers, model router, tool-call repair parser
   aether/tools/      20 tools via the @tool registry (schemas from type hints)
   aether/memory/     SQLite store, hybrid RAG, facts, tasks, quizzes, sessions
   aether/mcp/        dependency-free MCP stdio client + server manager

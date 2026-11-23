@@ -8,6 +8,7 @@ import type {
   ClassSlot,
   CloudProvider,
   ModelList,
+  NetworkHost,
   Fact,
   Health,
   KnowledgeDoc,
@@ -64,6 +65,9 @@ export const api = {
   models: () => request<ModelList>("/api/models"),
   setModel: (model: string) => request<{ current: string; cloud?: boolean }>("/api/models", json("POST", { model })),
   providers: () => request<CloudProvider[]>("/api/providers"),
+  hosts: () => request<NetworkHost[]>("/api/hosts"),
+  setHost: (name: string, url: string) => request<NetworkHost>(`/api/hosts/${name}`, json("PUT", { url })),
+  removeHost: (name: string) => request<{ removed: string }>(`/api/hosts/${name}`, json("DELETE")),
   setProviderKey: (id: string, key: string) =>
     request<CloudProvider>(`/api/providers/${id}/key`, json("PUT", { key })),
   removeProviderKey: (id: string) => request<{ removed: string }>(`/api/providers/${id}/key`, json("DELETE")),

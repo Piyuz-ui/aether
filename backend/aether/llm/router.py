@@ -1,13 +1,17 @@
-"""One model backend for the engine: local Ollama models plus optional cloud providers.
+"""One model backend for the engine: this machine's Ollama, other computers' Ollama on your
+network (e.g. a gaming PC's GPU), and optional cloud providers.
 
-Model names choose the backend. "qwen2.5:7b" runs on Ollama; "gemini:gemini-2.5-flash",
-"claude:…", "mistral:…" and the other provider prefixes in cloud.PROVIDERS run in the cloud. The router has the same methods as
-OllamaClient, so nothing else in AETHER needs to know the difference. Embeddings (the
-knowledge vault and memory) always stay on Ollama, on this machine.
+Model names choose the backend:
+    "qwen2.5:7b"               Ollama on this machine
+    "qwen3:14b@pc"             Ollama on the network host named "pc" (still private: your network)
+    "gemini:gemini-2.5-flash"  a cloud provider (any prefix in cloud.PROVIDERS)
+The router has the same methods as OllamaClient, so nothing else in AETHER needs to know the
+difference. Embeddings (the knowledge vault and memory) always stay on this machine.
 """
 from __future__ import annotations
 
 import os
+import re
 from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any
@@ -15,13 +19,14 @@ from typing import Any
 from .cloud import (PROVIDERS, ClaudeProvider, OpenAICompatProvider, split_model)
 from .ollama import ChatDelta, OllamaClient, OllamaError
 
-
+HOST_NAME = re.compile(r"^[a-z][a-z0-9-]{0,23}$")
 
 class ModelRouter:
     def __init__(self, ollama: OllamaClient, *, keys: dict[str, str] | None = None,
                  context_length: int = 16384, cloud_max_output_tokens: int = 8192,
                  claude_max_output_tokens: int = 16000, timeout_s: float = 300.0,
-                 transport: Any = None, claude_client: Any = None):
+                 transport: Any = None, claude_client: Any = None,
+                 hosts: dict[str, str] | None = None, host_transport: Any = None):
         self.ollama = ollama
         self.context_length = context_length
         self._limits = (cloud_max_output_tokens, claude_max_output_tokens, timeout_s)
@@ -31,6 +36,35 @@ class ModelRouter:
         for pid, key in (keys or {}).items():
             if key:
                 self.providers[pid] = self._make(pid, key)
+        self._host_transport = host_transport  # tests inject a mock Ollama
+        self.hosts: dict[str, OllamaClient] = {}
+        self.host_urls: dict[str, str] = {}
+        for name, url in (hosts or {}).items():
+            if HOST_NAME.match(name) and url:
+                self.hosts[name] = self._make_host(url)
+                self.host_urls[name] = url.rstrip("/")
+
+    def _make_host(self, url: str) -> OllamaClient:
+        return OllamaClient(url, timeout_s=self._limits[2], transport=self._host_transport)
+
+    async def set_host(self, name: str, url: str | None) -> None:
+        """Add (after checking it answers), replace or remove a network Ollama host, live."""
+        if not HOST_NAME.match(name):
+            raise OllamaError("Host names use lowercase letters, digits and dashes (e.g. pc).")
+        old = self.hosts.pop(name, None)
+        self.host_urls.pop(name, None)
+        if old is not None:
+            await old.aclose()
+        if not url:
+            return
+        client = self._make_host(url)
+        if not await client.health():
+            await client.aclose()
+            raise OllamaError(f"No Ollama answered at {url}.",
+                              hint="On that computer: open Ollama, set OLLAMA_HOST=0.0.0.0 and allow "
+                                   "port 11434 through the firewall (see pc/setup-ollama-pc.ps1).")
+        self.hosts[name] = client
+        self.host_urls[name] = url.rstrip("/")
 
     def _make(self, pid: str, key: str) -> Any:
         out_cap, claude_cap, timeout_s = self._limits
@@ -62,6 +96,31 @@ class ModelRouter:
     def is_cloud(self, model: str | None) -> bool:
         return bool(model) and split_model(model)[0] is not None
 
+    @staticmethod
+    def split_host(model: str) -> tuple[str | None, str]:
+        """("pc", "qwen3:14b") for "qwen3:14b@pc"; (None, model) otherwise."""
+        bare, sep, host = model.rpartition("@")
+        if sep and bare and HOST_NAME.match(host):
+            return host, bare
+        return None, model
+
+    def is_remote(self, model: str | None) -> bool:
+        """A model on another computer on your network (private, but not this machine)."""
+        return bool(model) and not self.is_cloud(model) and self.split_host(model or "")[0] is not None
+
+    def _ollama_for(self, model: str) -> tuple[OllamaClient, str]:
+        """The Ollama that serves `model` (this machine's, or a network host's) and its bare name."""
+        if self.is_cloud(model):
+            raise OllamaError(f"'{model}' is a cloud model.")
+        host, bare = self.split_host(model)
+        if host is None:
+            return self.ollama, model
+        client = self.hosts.get(host)
+        if client is None:
+            raise OllamaError(f"There's no computer named '{host}' set up.",
+                              hint="Add it in Settings → Computers on your network.")
+        return client, bare
+
     def _cloud(self, model: str) -> tuple[Any, str]:
         pid, bare = split_model(model)
         assert pid is not None
@@ -88,6 +147,18 @@ class ModelRouter:
         return await self.ollama.list_models()
 
     async def resolve_model(self, preferred: str, fallbacks: list[str]) -> tuple[str, str | None]:
+        if self.is_remote(preferred):
+            host, bare = self.split_host(preferred)
+            client = self.hosts.get(host or "")
+            try:
+                if client is not None and bare in await client.list_models():
+                    return preferred, None
+                why = (f"'{bare}' isn't installed on the computer '{host}'" if client
+                       else f"There's no computer named '{host}' set up")
+            except OllamaError:
+                why = f"The computer '{host}' isn't reachable right now"
+            local, _note = await self.ollama.resolve_model(*(fallbacks[:1] or ["qwen2.5:7b"]), fallbacks[1:])
+            return local, f"{why}, so using {local} on this Mac for now."
         if self.is_cloud(preferred):
             pid, _ = split_model(preferred)
             if pid in self.providers:
@@ -106,12 +177,32 @@ class ModelRouter:
             if provider is not None and provider.meta(bare).vision:
                 caps.add("vision")
             return caps
-        return await self.ollama.capabilities(model)
+        client, bare = self._ollama_for(model)
+        return await client.capabilities(bare)
 
     async def find_model_with(self, *needs: str, prefer: str = "") -> str | None:
-        if prefer and self.is_cloud(prefer) and set(needs) <= await self.capabilities(prefer):
-            return prefer
-        return await self.ollama.find_model_with(*needs, prefer=prefer)
+        """A model with these capabilities: the preferred one, else this Mac's, else a network host's."""
+        if prefer and (self.is_cloud(prefer) or self.is_remote(prefer)):
+            try:
+                if set(needs) <= await self.capabilities(prefer):
+                    return prefer
+            except OllamaError:
+                pass
+            prefer = ""
+        try:
+            found = await self.ollama.find_model_with(*needs, prefer=prefer)
+        except OllamaError:
+            found = None
+        if found:
+            return found
+        for name, client in self.hosts.items():
+            try:
+                hit = await client.find_model_with(*needs)
+            except OllamaError:
+                continue
+            if hit:
+                return f"{hit}@{name}"
+        return None
 
     def chat_stream(self, *, model: str, messages: list[dict[str, Any]],
                     tools: list[dict[str, Any]] | None = None,
@@ -122,8 +213,9 @@ class ModelRouter:
             provider, bare = self._cloud(model)
             return provider.chat_stream(model=bare, messages=messages, tools=tools,
                                         options=options, think=think)
-        return self.ollama.chat_stream(model=model, messages=messages, tools=tools,
-                                       options=options, think=think)
+        client, bare = self._ollama_for(model)
+        return client.chat_stream(model=bare, messages=messages, tools=tools,
+                                  options=options, think=think)
 
     async def embed(self, texts: list[str], model: str) -> list[list[float]]:
         return await self.ollama.embed(texts, model)
@@ -131,6 +223,8 @@ class ModelRouter:
     async def aclose(self) -> None:
         for p in self.providers.values():
             await p.aclose()
+        for h in self.hosts.values():
+            await h.aclose()
         await self.ollama.aclose()
 
     # -------------------------------------------------------------- catalog
@@ -155,13 +249,35 @@ class ModelRouter:
         return out
 
 
+    async def hosts_catalog(self) -> list[dict[str, Any]]:
+        """Every network Ollama host: its address, whether it answers, and its chat models."""
+        out = []
+        for name, client in self.hosts.items():
+            entry: dict[str, Any] = {"name": name, "url": self.host_urls[name], "online": False,
+                                     "models": [], "error": None}
+            try:
+                names = await client.list_models()
+                entry["online"] = True
+            except OllamaError as e:
+                names, entry["error"] = [], {"message": e.message, "hint": e.hint}
+            for n in names:
+                caps = await client.capabilities(n)
+                if caps and "completion" not in caps:
+                    continue  # embedding-only models
+                entry["models"].append({"id": f"{n}@{name}", "name": n, "vision": "vision" in caps,
+                                        "tools": "tools" in caps})
+            out.append(entry)
+        return out
+
+
 def router_from_settings(settings: Any) -> ModelRouter:
-    """Local Ollama, plus every cloud provider whose API key is set."""
+    """Local Ollama, network Ollama hosts, and every cloud provider whose API key is set."""
     return ModelRouter(OllamaClient(settings.ollama_url, timeout_s=settings.request_timeout_s),
                        keys=settings.cloud_keys(), context_length=settings.context_length,
                        cloud_max_output_tokens=settings.cloud_max_output_tokens,
                        claude_max_output_tokens=settings.claude_max_output_tokens,
-                       timeout_s=settings.request_timeout_s)
+                       timeout_s=settings.request_timeout_s,
+                       hosts=dict(getattr(settings, "ollama_hosts", {}) or {}))
 
 
 def save_env_value(env_file: Path, name: str, value: str | None) -> None:

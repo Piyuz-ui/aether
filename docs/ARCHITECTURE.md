@@ -1,6 +1,6 @@
 # AETHER: system architecture
 
-AETHER is a local-first autonomous agent. A small, readable Python engine runs a ReAct-style tool-calling loop against a local Ollama model (or, if you opt in, one of 11 cloud providers such as Gemini, Groq, Mistral, OpenAI or Claude). A `ModelRouter` picks the backend from the model name (`gemini:…`, `claude:…`), so the engine never knows the difference. Embeddings always stay on Ollama. Every step of that loop is published as a typed event, so the terminal, the API and the web UI all show the same live trace.
+AETHER is a local-first autonomous agent. A small, readable Python engine runs a ReAct-style tool-calling loop against a local Ollama model (or, if you opt in, one of 11 cloud providers such as Gemini, Groq, Mistral, OpenAI or Claude). Models can also run on another computer's GPU on your network (`qwen3:14b@pc`). A `ModelRouter` picks the backend from the model name (`qwen3:14b@pc`, `gemini:…`, `claude:…`), so the engine never knows the difference. Embeddings always stay on Ollama. Every step of that loop is published as a typed event, so the terminal, the API and the web UI all show the same live trace.
 
 ## 1. Big picture
 

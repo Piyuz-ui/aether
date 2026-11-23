@@ -108,6 +108,11 @@ class ModelChoice(BaseModel):
     model: str
 
 
+class HostIn(BaseModel):
+    # "192.168.1.50", "my-pc.local:11434" or "http://100.64.0.7:11434"
+    url: str = Field(min_length=3, max_length=200, pattern=r"^(https?://)?[A-Za-z0-9.\-\[\]:]+/?$")
+
+
 class KeyIn(BaseModel):
     key: str = Field(min_length=8, max_length=400, pattern=r"^[\x21-\x7e]+$")  # no spaces/newlines
 
@@ -210,16 +215,23 @@ def create_app(settings: Settings | None = None, *, llm: Any = None,
         ctx = ctx_of(request)
         ollama_up = await ctx.llm.health() if hasattr(ctx.llm, "health") else True
         is_cloud = getattr(ctx.llm, "is_cloud", lambda _m: False)
+        is_remote = getattr(ctx.llm, "is_remote", lambda _m: False)
         model, note, error = ctx.agent.model, ctx.agent.model_note, None
         wanted = model or ctx.settings.model
         # A cloud brain works without Ollama (only document search and memory need it).
-        if model is None and (ollama_up or is_cloud(wanted)):
+        if model is None and (ollama_up or is_cloud(wanted) or is_remote(wanted)):
             try:
                 model = await ctx.agent.ensure_model()
                 note = ctx.agent.model_note
             except OllamaError as e:
                 error = {"message": e.message, "hint": e.hint}
-        if not ollama_up and not is_cloud(model):
+        host = ctx.llm.split_host(model)[0] if model and is_remote(model) else None
+        if host is not None:
+            client = ctx.llm.hosts.get(host)
+            if client is None or not await client.health():
+                error = {"message": f"Can't reach the computer '{host}'.",
+                         "hint": "Make sure it's on, Ollama is open there, and both are on the same network."}
+        elif not ollama_up and not is_cloud(model):
             error = {"message": f"Can't reach Ollama at {ctx.settings.ollama_url}.",
                      "hint": "Open the Ollama app, or run `ollama serve`."}
         emb = ctx.memory.embedder
@@ -227,7 +239,7 @@ def create_app(settings: Settings | None = None, *, llm: Any = None,
         limit_fn = getattr(ctx.llm, "context_limit", None)
         return {"ok": error is None, "version": __version__, "ollama": ollama_up,
                 "model": model, "model_note": note, "error": error,
-                "cloud": provider is not None,
+                "cloud": provider is not None, "host": host,
                 "provider": PROVIDERS[provider].label if provider else None,
                 "embed_model": ctx.settings.embed_model, "embeddings_available": emb.available,
                 "embeddings_hint": emb.last_error.hint if emb.last_error else None,
@@ -244,10 +256,11 @@ def create_app(settings: Settings | None = None, *, llm: Any = None,
         except OllamaError as e:
             local_error = {"message": e.message, "hint": e.hint}
         catalog = await ctx.llm.catalog() if hasattr(ctx.llm, "catalog") else []
-        if local_error and not any(p["configured"] for p in catalog):
+        hosts = await ctx.llm.hosts_catalog() if hasattr(ctx.llm, "hosts_catalog") else []
+        if local_error and not any(p["configured"] for p in catalog) and not any(h["online"] for h in hosts):
             raise HTTPException(503, detail=local_error)
         return {"models": installed, "current": ctx.agent.model or ctx.settings.model,
-                "local_error": local_error, "cloud": catalog}
+                "local_error": local_error, "cloud": catalog, "hosts": hosts}
 
     @app.post("/api/models")
     async def choose_model(body: ModelChoice, request: Request) -> dict[str, Any]:
@@ -259,6 +272,19 @@ def create_app(settings: Settings | None = None, *, llm: Any = None,
                 raise HTTPException(409, detail={"message": f"{info.label} isn't set up yet.",
                                                  "hint": f"Add a key in Settings → Cloud brains "
                                                          f"(get one at {info.key_url})."})
+        elif getattr(ctx.llm, "is_remote", lambda _m: False)(body.model):
+            host, bare = ctx.llm.split_host(body.model)
+            client = ctx.llm.hosts.get(host)
+            if client is None:
+                raise HTTPException(404, detail={"message": f"There's no computer named '{host}'.",
+                                                 "hint": "Add it in Settings → Computers on your network."})
+            try:
+                installed = await client.list_models()
+            except OllamaError as e:
+                raise HTTPException(503, detail={"message": f"Can't reach '{host}'.", "hint": e.hint}) from e
+            if bare not in installed:
+                raise HTTPException(404, detail={"message": f"'{bare}' isn't installed on {host}.",
+                                                 "hint": f"On {host}, run: ollama pull {bare}"})
         else:
             try:
                 installed = await ctx.llm.list_models()
@@ -269,6 +295,43 @@ def create_app(settings: Settings | None = None, *, llm: Any = None,
                                                  "hint": f"Run: ollama pull {body.model}"})
         ctx.agent.set_model(body.model)
         return {"current": body.model, "cloud": pid is not None}
+
+    # ------------------------------------------- computers on your network
+    @app.get("/api/hosts")
+    async def hosts(request: Request) -> list[dict[str, Any]]:
+        ctx = ctx_of(request)
+        return await ctx.llm.hosts_catalog() if hasattr(ctx.llm, "hosts_catalog") else []
+
+    @app.put("/api/hosts/{name}")
+    async def set_host(name: str, body: HostIn, request: Request) -> dict[str, Any]:
+        """Check that Ollama answers at the address, then save it to backend/.env."""
+        ctx = ctx_of(request)
+        if not hasattr(ctx.llm, "set_host"):
+            raise HTTPException(404, detail={"message": "Network computers aren't supported here."})
+        url = body.url.strip().rstrip("/")
+        if "://" not in url:
+            url = f"http://{url}"
+        if url.count(":") == 1:  # no port given: Ollama's default
+            url += ":11434"
+        try:
+            await ctx.llm.set_host(name, url)
+        except OllamaError as e:
+            raise HTTPException(422, detail={"message": e.message, "hint": e.hint}) from e
+        save_env_value(getattr(request.app.state, "env_file", ENV_FILE), "AETHER_OLLAMA_HOSTS",
+                       json.dumps(ctx.llm.host_urls))
+        return next(h for h in await ctx.llm.hosts_catalog() if h["name"] == name)
+
+    @app.delete("/api/hosts/{name}")
+    async def remove_host(name: str, request: Request) -> dict[str, Any]:
+        ctx = ctx_of(request)
+        if name not in getattr(ctx.llm, "hosts", {}):
+            raise HTTPException(404, detail={"message": f"There's no computer named '{name}'."})
+        await ctx.llm.set_host(name, None)
+        save_env_value(getattr(request.app.state, "env_file", ENV_FILE), "AETHER_OLLAMA_HOSTS",
+                       json.dumps(ctx.llm.host_urls) if ctx.llm.host_urls else None)
+        if ctx.agent.model and ctx.llm.split_host(ctx.agent.model)[0] == name:
+            ctx.agent.model, ctx.agent.model_note = None, None  # back to this Mac's default
+        return {"removed": name}
 
     # ------------------------------------------------------ cloud brains
     @app.get("/api/providers")

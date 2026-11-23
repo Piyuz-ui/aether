@@ -3,7 +3,7 @@
 /** Model switcher, system health, motion, voice and reminder settings. */
 import clsx from "clsx";
 import { motion } from "framer-motion";
-import { AudioLines, CalendarDays, Cloud, Cpu, Database, ExternalLink, KeyRound, Plug, RefreshCw, Trash2, Volume2 } from "lucide-react";
+import { AudioLines, CalendarDays, Cloud, Cpu, Database, ExternalLink, KeyRound, MonitorSmartphone, Plug, RefreshCw, Trash2, Volume2 } from "lucide-react";
 import { useState } from "react";
 
 import { api, ApiError } from "@/lib/api";
@@ -78,6 +78,94 @@ function NeuralVoiceSection() {
           <Toggle checked={prefs.speakReplies} onChange={(v) => { if (v) voice.unlock(); else voice.stop(); setPref("speakReplies", v); }}
             label="Auto-speak replies" hint="Starts talking at the first finished sentence, while the rest is still being written." />
         </div>
+      </div>
+    </section>
+  );
+}
+
+function HostsSection({ revision, onChanged, toast }: {
+  revision: number;
+  onChanged: () => void;
+  toast: (t: string, b?: string) => void;
+}) {
+  const hosts = useLive(api.hosts, revision, () => 20_000);
+  const [name, setName] = useState("pc");
+  const [url, setUrl] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<ApiError | null>(null);
+  const [guide, setGuide] = useState(false);
+
+  async function add() {
+    setBusy(true);
+    setErr(null);
+    try {
+      const h = await api.setHost(name.trim().toLowerCase(), url.trim());
+      setUrl("");
+      toast(`${h.name} connected`, `${h.models.length} model${h.models.length === 1 ? "" : "s"} on it are now in the model menu.`);
+      void hosts.reload();
+      onChanged();
+    } catch (e) {
+      setErr(e instanceof ApiError ? e : new ApiError(0, String(e)));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function remove(n: string) {
+    try {
+      await api.removeHost(n);
+      toast(`${n} removed`);
+      void hosts.reload();
+      onChanged();
+    } catch (e) {
+      toast(e instanceof ApiError ? e.message : "Couldn't remove it");
+    }
+  }
+
+  return (
+    <section>
+      <PanelTitle title="Computers on your network"
+        hint="Run models on another computer's GPU (e.g. a gaming PC) over your home network. Still private: nothing goes to the internet." />
+      <div className="glass-inset space-y-2.5 rounded-2xl p-3">
+        {hosts.data?.map((h) => (
+          <div key={h.name} className="flex items-start gap-2.5">
+            <MonitorSmartphone className={clsx("mt-0.5 size-4 shrink-0", h.online ? "text-seafoam" : "text-mist")} />
+            <div className="min-w-0 flex-1">
+              <div className="flex flex-wrap items-center gap-1.5">
+                <span className="text-sm text-frost">{h.name}</span>
+                <Chip tone={h.online ? "seafoam" : "coral"}>{h.online ? "online" : "offline"}</Chip>
+                {h.online && <Chip>{h.models.length} models</Chip>}
+              </div>
+              <div className="font-mono text-[11px] text-mist">{h.url}</div>
+              {!h.online && <p className="text-[11px] text-mist">Turn it on and open Ollama there; it reconnects by itself.</p>}
+            </div>
+            <JiggleButton tone="ghost" className="px-2 py-1" aria-label={`Remove ${h.name}`} onClick={() => void remove(h.name)}>
+              <Trash2 className="size-3.5" />
+            </JiggleButton>
+          </div>
+        ))}
+        <form className="flex items-center gap-2" onSubmit={(e) => { e.preventDefault(); if (url.trim()) void add(); }}>
+          <input value={name} onChange={(e) => setName(e.target.value)} aria-label="Name for this computer"
+            className={clsx(inputClass, "w-20 shrink-0")} placeholder="pc" />
+          <input value={url} onChange={(e) => setUrl(e.target.value)} aria-label="Its address" spellCheck={false}
+            className={inputClass} placeholder="192.168.1.50" />
+          <JiggleButton type="submit" className="shrink-0 px-3 py-1.5 text-xs" disabled={busy || !url.trim() || !name.trim()}>
+            {busy ? "Checking…" : "Connect"}
+          </JiggleButton>
+        </form>
+        {err && <ErrorNote message={err.message} hint={err.hint} />}
+        <button type="button" onClick={() => setGuide((g) => !g)} className="text-[11px] text-glacier underline-offset-2 hover:underline">
+          {guide ? "Hide" : "How to set up a Windows PC (RTX GPU)"}
+        </button>
+        {guide && (
+          <ol className="list-decimal space-y-1.5 pl-4 text-[11px] leading-relaxed text-frost/85">
+            <li>On the PC, install the latest Ollama from <span className="font-mono text-glacier">ollama.com</span> (recent versions support RTX 50-series GPUs).</li>
+            <li>Copy <span className="font-mono text-glacier">pc/setup-ollama-pc.ps1</span> from this project to the PC. Right-click PowerShell → <i>Run as administrator</i>, then run:
+              <code className="mt-1 block rounded-lg bg-black/30 px-2 py-1 font-mono text-[10.5px] text-glacier">powershell -ExecutionPolicy Bypass -File setup-ollama-pc.ps1</code>
+              It shares Ollama on your home network only, opens port 11434 for private networks, downloads good models for a 16 GB GPU, and prints the PC&apos;s address.</li>
+            <li>Type that address above and press Connect. The PC&apos;s models appear in the model menu as <span className="font-mono">model@pc</span>.</li>
+          </ol>
+        )}
       </div>
     </section>
   );
@@ -278,6 +366,11 @@ export function SettingsPanel({ health, onHealthChange, revision, toast }: {
               <optgroup label="On this Mac">
                 {models.data?.models.filter((m) => !/embed|bge-|minilm|rerank/i.test(m)).map((m) => <option key={m} value={m}>{m}</option>)}
               </optgroup>
+              {models.data?.hosts?.filter((h) => h.online).map((h) => (
+                <optgroup key={h.name} label={`On ${h.name} (your network)`}>
+                  {h.models.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
+                </optgroup>
+              ))}
               {models.data?.cloud?.filter((p) => p.configured).map((p) => (
                 <optgroup key={p.id} label={`${p.label} (cloud)`}>
                   {p.models.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
@@ -301,6 +394,8 @@ export function SettingsPanel({ health, onHealthChange, revision, toast }: {
           {health?.embeddings_hint && <p className="font-mono text-[11px] text-frost/75">→ {health.embeddings_hint}</p>}
         </div>
       </section>
+
+      <HostsSection revision={revision} toast={toast} onChanged={() => { void models.reload(); onHealthChange(); }} />
 
       <CloudSection revision={revision} toast={toast} onChanged={() => { void models.reload(); onHealthChange(); }} />
 
