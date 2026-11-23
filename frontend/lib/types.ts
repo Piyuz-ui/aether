@@ -50,7 +50,11 @@ export type ToolStep = {
   status: ToolStatus;
   output?: string;
   duration?: number;
+  /** Charts / images this tool made (from the tool_result event). */
+  artifacts?: ChartArtifact[];
 };
+
+export type ChartArtifact = { path: string; name: string; url: string; download: string };
 
 export type ThoughtStep = { kind: "thought"; text: string; retry?: boolean };
 

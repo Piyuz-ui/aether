@@ -12,7 +12,7 @@
 ![Ollama](https://img.shields.io/badge/LLM-Ollama%20(local)-7DD3FC)
 ![MCP](https://img.shields.io/badge/MCP-client-A5B4FC)
 ![Voice](https://img.shields.io/badge/Voice-Kokoro--82M-5EEAD4)
-![Tests](https://img.shields.io/badge/tests-249%20passing-5EEAD4)
+![Tests](https://img.shields.io/badge/tests-265%20passing-5EEAD4)
 ![Privacy](https://img.shields.io/badge/data-local%20by%20default-0E2442)
 [![License: MIT](https://img.shields.io/badge/license-MIT-F0F9FF)](LICENSE)
 
@@ -86,6 +86,7 @@ Full design: **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** (system and sequen
 | Area | Tools | Safety |
 |---|---|---|
 | Research | `web_search` (4 fallback sources), `read_webpage` (blocks private IPs) | safe |
+| Code & data | `python_sandbox` (numpy, pandas, matplotlib; 15 s; charts appear inline), `analyze_csv` (CSV / Excel / JSON) | asks / safe |
 | Knowledge | `search_knowledge_base`, `list_documents` | safe |
 | Study | `make_quiz` | safe |
 | Planner | `add_task`, `manage_tasks`, `add_class`, `manage_timetable` | deleting asks first |

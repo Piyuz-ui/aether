@@ -45,6 +45,19 @@ PROMISE_RE = re.compile(r"\b(i'll|i will|i'm going to|let me|let's|now i|next,? 
 AfterTurn = Callable[[str, str, str], Awaitable[list[dict[str, Any]]]]
 
 
+def artifacts_in(output: str) -> list[dict[str, str]]:
+    """Images a tool made (its `[artifact] artifacts/x.png` lines) → URLs the chat can show.
+    `url` is served by /artifacts (static files); `download` by /api/files (as an attachment)."""
+    out = []
+    for line in output.splitlines():
+        if line.startswith("[artifact] "):
+            path = line.removeprefix("[artifact] ").strip()
+            if path.startswith("artifacts/") and ".." not in path:
+                out.append({"path": path, "name": path.rsplit("/", 1)[-1], "url": f"/{path}",
+                            "download": f"/api/files/{path}?download=true"})
+    return out
+
+
 class ChatModel(Protocol):
     """What the engine needs from a model backend (OllamaClient, or a fake in tests)."""
 
@@ -131,7 +144,10 @@ class AetherAgent:
                 {"role": "system", "content": build_system_prompt(
                     agent_name=s.agent_name, user_name=s.user_name, memory_context=memory_context)},
                 *session.history(s.history_chars), user_for_model]
-            tools = self.registry.schemas()
+            offered = self._route_tools(goal, session, model, bool(images))
+            tools = [self.registry.get(n).schema() for n in offered if self.registry.get(n)]  # type: ignore[union-attr]
+            if len(offered) < len(self.registry.names):
+                yield ev(EventType.STATUS, state=AgentState.THINKING, tools=offered)
             known = self.registry.names
             format_retries = 0
             nudges = 0
@@ -282,6 +298,24 @@ class AetherAgent:
             self.broker.cancel_run(run_id)
 
     # --------------------------------------------------------------- helpers
+    def _route_tools(self, goal: str, session: Session, model: str, has_images: bool) -> list[str]:
+        """All tools for cloud models; the 6–8 most relevant for local (Ollama) ones."""
+        everything = [t.name for t in self.registry.all()]
+        if not self.settings.tool_router or getattr(self.llm, "is_cloud", lambda _m: False)(model):
+            return everything
+        try:
+            from tool_router import route
+        except ImportError:  # backend/ not on the path (embedded use): no routing
+            return everything
+        recent = {c.get("function", {}).get("name") for turn in session.turns[-3:] for m in turn
+                  for c in (m.get("tool_calls") or [])}
+        names = route(goal, self.registry.all(), max_tools=self.settings.router_max_tools,
+                      recent={n for n in recent if n}, has_images=has_images)
+        for pattern, tool_name, _ in INTENT_TOOLS:  # a quiz or PDF request must get its tool
+            if pattern.search(goal) and tool_name in everything and tool_name not in names:
+                names = [tool_name, *names][: self.settings.router_max_tools]
+        return names
+
     async def _vision_model(self, current: str) -> str | None:
         """The current model if it can see images, else an installed one that can."""
         caps_fn = getattr(self.llm, "capabilities", None)
@@ -409,5 +443,6 @@ class AetherAgent:
         result = await self.registry.execute(spec, clean, timeout_s=self.settings.tool_timeout_s,
                                              max_output_chars=self.settings.max_tool_output_chars)
         yield ev(EventType.TOOL_RESULT, call_id=call_id, name=name, ok=result.ok,
-                 output=result.output, duration_s=round(result.duration_s, 3))
+                 output=result.output, duration_s=round(result.duration_s, 3),
+                 artifacts=artifacts_in(result.output) if result.ok else [])
         out.append(result)

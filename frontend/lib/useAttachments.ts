@@ -10,8 +10,9 @@ import { api, ApiError } from "./api";
 import type { KnowledgeDoc } from "./types";
 
 export const ACCEPTED = /\.(pdf|pptx|md|markdown|txt)$/i;
+export const DATA = /\.(csv|tsv|xlsx|xlsm|json)$/i;   // tables for analyze_csv / python_sandbox
 export const IMAGE = /\.(png|jpe?g|webp|gif|heic|heif)$/i;
-export const ACCEPT_ATTR = ".pdf,.pptx,.md,.markdown,.txt,image/*";
+export const ACCEPT_ATTR = ".pdf,.pptx,.md,.markdown,.txt,.csv,.tsv,.xlsx,.json,image/*";
 const MAX_SIDE = 1600;
 
 export type ImageAttachment = { id: string; name: string; dataUrl: string };
@@ -30,7 +31,10 @@ async function loadImage(file: File): Promise<string> {
   return canvas.toDataURL("image/jpeg", 0.88);
 }
 
-export type Attachment = Pick<KnowledgeDoc, "id" | "filename" | "status" | "progress" | "error">;
+export type Attachment = Pick<KnowledgeDoc, "id" | "filename" | "status" | "progress" | "error"> & {
+  /** Data files: where they were saved in the workspace (e.g. uploads/sales.csv). */
+  path?: string;
+};
 
 export function useAttachments(onError: (title: string, body?: string) => void) {
   const [items, setItems] = useState<Attachment[]>([]);
@@ -52,6 +56,21 @@ export function useAttachments(onError: (title: string, body?: string) => void) 
       }
     }
     files = files.filter((f) => !pics.includes(f));
+    const data = files.filter((f) => DATA.test(f.name));
+    if (data.length) {
+      setUploading(true);
+      try {
+        const saved = await api.uploadData(data);
+        setItems((prev) => [...prev, ...saved.map((d, i) => ({
+          id: -(Date.now() + i), filename: d.filename, status: "ready" as const, progress: 1, error: null, path: d.path }))]);
+      } catch (e) {
+        const err = e instanceof ApiError ? e : new ApiError(0, String(e));
+        onError(err.message, err.hint);
+      } finally {
+        setUploading(false);
+      }
+    }
+    files = files.filter((f) => !data.includes(f));
     if (!files.length) return;
     const rejected = files.filter((f) => !ACCEPTED.test(f.name));
     const ok = files.filter((f) => ACCEPTED.test(f.name));
@@ -59,7 +78,7 @@ export function useAttachments(onError: (title: string, body?: string) => void) 
       onError("Some files were skipped",
         rejected.some((f) => /\.ppt$/i.test(f.name))
           ? "Old .ppt files: save them as .pptx first."
-          : `Supported: PDF, PowerPoint (.pptx), Markdown, TXT. Skipped: ${rejected.map((f) => f.name).join(", ")}`);
+          : `Supported: PDF, PowerPoint (.pptx), Markdown, TXT, and data files (CSV, Excel, JSON). Skipped: ${rejected.map((f) => f.name).join(", ")}`);
     }
     if (!ok.length) return;
     setUploading(true);

@@ -191,11 +191,16 @@ export function AetherApp() {
     voice.stop();           // a new question interrupts whatever is being read
     voice.unlock();         // this click lets the browser play audio for the reply
     feeder.current = null;
-    const ready = files.items.filter((a) => a.status === "ready");
+    const ready = files.items.filter((a) => a.status === "ready" && !a.path);
+    const tables = files.items.filter((a) => a.path);
     const images = files.images.map((i) => i.dataUrl);
-    const goal = ready.length
-      ? `${text.trim() || "Summarise the attached files."}\n\n(Attached to my Knowledge Vault just now: ${ready.map((a) => a.filename).join(", ")}. Search them to answer.)`
-      : text;
+    let goal = text;
+    if (ready.length) {
+      goal = `${goal.trim() || "Summarise the attached files."}\n\n(Attached to my Knowledge Vault just now: ${ready.map((a) => a.filename).join(", ")}. Search them to answer.)`;
+    }
+    if (tables.length) {
+      goal = `${goal.trim() || "Analyse the attached data."}\n\n(Data file${tables.length > 1 ? "s" : ""} attached: ${tables.map((a) => a.path).join(", ")}. Inspect with analyze_csv; use python_sandbox for charts.)`;
+    }
     files.clear();
     const userId = `u-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
     const shown = goal.trim() || (images.length ? "What's in this image?" : "");

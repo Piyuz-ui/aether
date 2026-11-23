@@ -71,6 +71,9 @@ class Settings(BaseSettings):
         return {pid: key.get_secret_value() for pid, key in fields.items()}
 
     # --- agent loop ----------------------------------------------------------
+    # Offer local models only the most relevant tools per request (tool_router.py).
+    tool_router: bool = True
+    router_max_tools: int = 8
     max_steps: int = 8
     max_format_retries: int = 2      # re-asks when a model emits a broken tool call
     max_nudges: int = 2              # re-asks when it ends with an unfixed failure / empty promise

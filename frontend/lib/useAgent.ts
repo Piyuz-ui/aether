@@ -10,6 +10,7 @@ import { useCallback, useEffect, useReducer, useRef } from "react";
 import { API_BASE, api, ApiError } from "./api";
 import { readSSE } from "./sse";
 import type {
+  ChartArtifact,
   Feedback,
   AgentEvent,
   AgentState,
@@ -167,6 +168,7 @@ function applyEvent(state: State, e: AgentEvent): State {
             status: d.denied ? "denied" : d.ok ? "ok" : "error",
             output: String(d.output ?? ""),
             duration: Number(d.duration_s ?? 0),
+            artifacts: (d.artifacts ?? []) as unknown as ChartArtifact[],
           }),
         })),
       };

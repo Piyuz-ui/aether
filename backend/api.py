@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import re
 import tempfile
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -22,6 +23,7 @@ from fastapi import FastAPI, File, HTTPException, Request, Response, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field, field_validator
 from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 from sse_starlette.sse import EventSourceResponse
 
 from aether import __version__
@@ -239,6 +241,10 @@ def create_app(settings: Settings | None = None, *, llm: Any = None,
                               "tasks, timetable and knowledge vault.")
     app.add_middleware(CORSMiddleware, allow_origins=settings.cors_origins, allow_credentials=True,
                        allow_methods=["*"], allow_headers=["*"])
+    # Charts and images that tools make (python_sandbox) are served straight from here.
+    artifacts = workspace().root / "artifacts"  # the same folder the tools write to
+    artifacts.mkdir(parents=True, exist_ok=True)
+    app.mount("/artifacts", StaticFiles(directory=artifacts), name="artifacts")
 
     def ctx_of(request: Request) -> AppContext:
         return request.app.state.ctx
@@ -598,9 +604,21 @@ def create_app(settings: Settings | None = None, *, llm: Any = None,
 
     @app.get("/api/tools")
     async def tools() -> list[dict[str, Any]]:
-        return [{"name": t.name, "description": t.description, "category": t.category,
-                 "icon": t.icon, "risk": "conditional" if t.risk_check else t.risk.value}
-                for t in REGISTRY.all()]
+        from tool_router import meta_for
+        out = []
+        for t in REGISTRY.all():
+            meta = meta_for(t.name, t)
+            out.append({"name": t.name, "description": t.description, "category": t.category,
+                        "icon": t.icon, "risk": "conditional" if t.risk_check else t.risk.value,
+                        "pack": meta.pack, "level": meta.level.value})
+        return out
+
+    @app.get("/api/tools/route")
+    async def tools_route(q: str, images: bool = False) -> dict[str, Any]:
+        """Which tools a local model would be offered for this request (for debugging)."""
+        from tool_router import route
+        return {"query": q, "tools": route(q, REGISTRY.all(), max_tools=settings.router_max_tools,
+                                           has_images=images)}
 
     # -------------------------------------------------------------- chat
     async def auto_title(ctx: AppContext, session_id: str, *, force: bool = False) -> str | None:
@@ -797,6 +815,29 @@ def create_app(settings: Settings | None = None, *, llm: Any = None,
             raise HTTPException(404, detail={"message": "That's a folder, not a file."})
         return FileResponse(target, filename=target.name,
                             content_disposition_type="attachment" if download else "inline")
+
+    @app.post("/api/workspace/upload", status_code=201)
+    async def upload_data(request: Request, files: list[UploadFile] = File(...)) -> list[dict[str, Any]]:
+        """Data files dropped in the chat (CSV, TSV, Excel, JSON) go to workspace/uploads/ for
+        analyze_csv and python_sandbox."""
+        limit = ctx_of(request).settings.max_upload_mb * 1024 * 1024
+        folder = workspace().resolve("uploads")
+        folder.mkdir(parents=True, exist_ok=True)
+        out = []
+        for f in files:
+            name = re.sub(r"[^A-Za-z0-9._-]+", "_", Path(f.filename or "data").name).strip("._") or "data"
+            if Path(name).suffix.lower() not in {".csv", ".tsv", ".xlsx", ".xlsm", ".json", ".txt"}:
+                raise HTTPException(422, detail={"message": f"{name}: only CSV, TSV, Excel (.xlsx) or JSON."})
+            data = await f.read(limit + 1)
+            if len(data) > limit:
+                raise HTTPException(413, detail={"message": f"{name} is over {ctx_of(request).settings.max_upload_mb} MB."})
+            target, n = folder / name, 1
+            while target.exists():
+                target = folder / f"{Path(name).stem}-{n}{Path(name).suffix}"
+                n += 1
+            target.write_bytes(data)
+            out.append({"path": workspace().relative(target), "filename": target.name, "size": len(data)})
+        return out
 
     @app.post("/api/files/pdf")
     async def note_to_pdf(body: PdfRequest) -> dict[str, Any]:

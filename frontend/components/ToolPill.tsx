@@ -111,7 +111,9 @@ export function ToolPill({ step }: { step: ToolStep }) {
             <div className="space-y-2 px-3 pb-3">
               <Section label="input">{JSON.stringify(step.args, null, 2)}</Section>
               {step.output !== undefined && (
-                <Section label={step.status === "ok" ? "output" : "result"}>{step.output}</Section>
+                <Section label={step.status === "ok" ? "output" : "result"}>
+                  {step.output.split("\n").filter((l) => !l.startsWith("[artifact] ")).join("\n")}
+                </Section>
               )}
             </div>
           </motion.div>

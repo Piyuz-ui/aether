@@ -123,6 +123,12 @@ export const api = {
     files.forEach((f) => form.append("files", f, f.name));
     return request<KnowledgeDoc[]>("/api/knowledge", { method: "POST", body: form });
   },
+  /** Data files (CSV, TSV, Excel, JSON) for analyze_csv / python_sandbox: saved to workspace/uploads/. */
+  uploadData: (files: File[]) => {
+    const form = new FormData();
+    files.forEach((f) => form.append("files", f, f.name));
+    return request<{ path: string; filename: string; size: number }[]>("/api/workspace/upload", { method: "POST", body: form });
+  },
   reindex: (id: number) => request(`/api/knowledge/${id}/reindex`, { method: "POST" }),
   deleteDocument: (id: number) => request(`/api/knowledge/${id}`, { method: "DELETE" }),
 
