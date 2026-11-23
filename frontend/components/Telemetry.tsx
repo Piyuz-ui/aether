@@ -10,6 +10,8 @@ import { Check, ChevronDown, Cloud, Cpu, X, Zap } from "lucide-react";
 import { useState } from "react";
 
 import { cloudProvider, modelName, remoteHost } from "@/lib/cloud";
+
+import { money } from "./panels/UsagePanel";
 import { jelly } from "@/lib/motion";
 import type { AssistantMessage, ToolStep } from "@/lib/types";
 
@@ -54,6 +56,9 @@ export function TelemetryChip({ m }: { m: AssistantMessage }) {
           </>
         )}
         <span className="text-mist/50">·</span>
+        {s?.cost_usd != null && s.cost_usd > 0 && (
+          <><span className="text-mist/50">·</span><span className="shrink-0 font-mono text-frost/85">{money(s.cost_usd)}</span></>
+        )}
         {cloud
           ? <span className="shrink-0 text-amber">cloud · {cloud}</span>
           : <span className="shrink-0 text-seafoam">{host ? `local · ${host}` : "local"}</span>}

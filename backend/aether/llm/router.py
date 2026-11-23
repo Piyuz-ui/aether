@@ -66,6 +66,9 @@ class ModelRouter:
         for pid, key in (keys or {}).items():
             if key:
                 self.providers[pid] = self._make(pid, key)
+        # Called with (model, CallStats, context limit) when a cloud request finishes; returns its
+        # cost. Set by the app to record usage (Settings → Usage).
+        self.usage_sink: Any = None
         self._host_transport = host_transport  # tests inject a mock Ollama
         # Each computer can have several addresses, in order of preference: usually its home
         # address first, then its Tailscale address for when you're away. The router uses the
@@ -290,14 +293,29 @@ class ModelRouter:
         # Returns the backend's own stream (not a wrapper), so closing it early really stops it.
         if self.is_cloud(model):
             provider, bare = self._cloud(model)
-            return provider.chat_stream(model=bare, messages=messages, tools=tools,
-                                        options=options, think=think)
+            return self._metered(model, provider.chat_stream(model=bare, messages=messages, tools=tools,
+                                                             options=options, think=think))
         host, _ = self.split_host(model)
         if host is not None and len(self.host_addrs.get(host, [])) > 1:
             return self._routed_stream(host, model, messages, tools, options, think)
         client, bare = self._ollama_for(model)
         return client.chat_stream(model=bare, messages=messages, tools=tools,
                                   options=options, think=think)
+
+    async def _metered(self, model: str, stream: AsyncIterator[ChatDelta]) -> AsyncIterator[ChatDelta]:
+        """Pass a cloud stream through, recording its usage and cost when it finishes."""
+        async with contextlib.aclosing(stream) as inner:
+            async for d in inner:
+                if d.done and d.stats is not None and self.usage_sink is not None:
+                    try:
+                        d.stats.cost_usd = self.usage_sink(model, d.stats, self.context_limit(model))
+                    except Exception:  # never let bookkeeping break a reply
+                        pass
+                yield d
+
+    def rate_limits(self) -> dict[str, dict[str, Any]]:
+        """What each provider last said about its limits (free tiers: what's left today/minute)."""
+        return {pid: p.limits for pid, p in self.providers.items() if getattr(p, "limits", None)}
 
     async def _routed_stream(self, host: str, model: str, messages: list[dict[str, Any]],
                              tools: list[dict[str, Any]] | None, options: dict[str, Any] | None,

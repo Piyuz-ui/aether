@@ -52,6 +52,8 @@ class MemorySystem:
         self.tasks = TaskBook(self.store)
         self.knowledge = KnowledgeBase(self.store, self.embedder, settings.data_dir / "knowledge")
         self.quizzes = QuizBook(self.store, self.facts)
+        from ..usage import UsageBook
+        self.usage = UsageBook(self.store)
 
     def session(self, session_id: str | None = None) -> PersistentSession:
         return PersistentSession(self.store, session_id)

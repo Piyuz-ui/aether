@@ -27,6 +27,7 @@ import { Composer, type ComposerHandle } from "./Composer";
 import { Drawer, type DrawerTab } from "./Drawer";
 import { MessageView, spokenText } from "./MessageView";
 import { ModelSwitcher } from "./ModelSwitcher";
+import { UsagePanel } from "./panels/UsagePanel";
 import { LandingContext, SendGhost, type Flight, type Rect } from "./SendFlight";
 import { ChatsPanel } from "./panels/ChatsPanel";
 import { MemoryPanel } from "./panels/MemoryPanel";
@@ -345,6 +346,7 @@ export function AetherApp() {
               onOpen={(id) => void agent.loadSession(id)}
               onDeleted={(id) => id === agent.sessionId && agent.newChat()} />
           )}
+          {tab === "usage" && <UsagePanel revision={agent.revision} />}
           {tab === "settings" && (
             <SettingsPanel health={health} onHealthChange={() => void loadHealth()} revision={agent.revision} toast={toast} />
           )}

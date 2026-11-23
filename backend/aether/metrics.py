@@ -24,6 +24,7 @@ class CallStats:
     load_s: float = 0.0
     prompt_s: float = 0.0
     gen_s: float = 0.0
+    cost_usd: float | None = None  # cloud models with a known price
 
     @classmethod
     def from_ollama(cls, r: dict[str, Any]) -> "CallStats":
@@ -78,8 +79,13 @@ class RunStats:
             parts.append(f"{k} tool{'s' * (k != 1)}")
         return " · ".join(parts)
 
+    @property
+    def cost_usd(self) -> float | None:
+        costs = [c.cost_usd for c in self.calls if c.cost_usd is not None]
+        return round(sum(costs), 6) if costs else None
+
     def to_dict(self) -> dict[str, Any]:
-        return {"model": self.model, "wall_s": round(self.wall_s, 2),
+        return {"model": self.model, "wall_s": round(self.wall_s, 2), "cost_usd": self.cost_usd,
                 "prompt_tokens": self.prompt_tokens, "output_tokens": self.output_tokens,
                 "context_used": self.context_used, "context_limit": self.context_limit,
                 "context_pct": round(self.context_pct, 1),

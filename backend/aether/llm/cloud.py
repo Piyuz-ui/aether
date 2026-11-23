@@ -223,6 +223,8 @@ class OpenAICompatProvider:
     _reasoning: _Echo = field(default_factory=_Echo)
     # Learned from refused requests: options this provider's models don't take.
     _dropped: set[str] = field(default_factory=set)
+    # The provider's latest rate-limit report, e.g. {"requests-day": {"remaining": 14390, "limit": 14400}}
+    limits: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         headers = {"Authorization": f"Bearer {self.api_key}"}
@@ -397,6 +399,27 @@ class OpenAICompatProvider:
             payload["tools"] = tools
         return payload
 
+    def _read_limits(self, headers: Any) -> None:
+        """x-ratelimit-remaining-<what> / x-ratelimit-limit-<what> / x-ratelimit-reset-<what>
+        (Groq, OpenAI, Cerebras, Mistral, OpenRouter… each report some of these)."""
+        found: dict[str, dict[str, Any]] = {}
+        for key, value in headers.items():
+            k = key.lower()
+            for part in ("remaining", "limit", "reset"):
+                prefix = f"x-ratelimit-{part}-"
+                if k.startswith(prefix):
+                    what = k[len(prefix):]
+                    slot = found.setdefault(what, {})
+                    if part == "reset":
+                        slot["reset"] = value
+                    else:
+                        try:
+                            slot[part] = int(float(value))
+                        except ValueError:
+                            pass
+        if found:
+            self.limits = {"at": time.time(), "windows": {w: v for w, v in found.items() if "remaining" in v}}
+
     def _learn(self, body: str, payload: dict[str, Any]) -> bool:
         """After a 400: if it was about an optional setting, stop sending it. True = retry."""
         low = body.lower()
@@ -435,6 +458,7 @@ class OpenAICompatProvider:
                         if r.status_code in (400, 422) and attempt < 3 and self._learn(body, payload):
                             continue  # nothing was streamed yet, so a retry is invisible
                         raise _status_error(self.provider, r.status_code, body, model)
+                    self._read_limits(r.headers)
                     if r.headers.get("content-type", "").startswith(("text/plain", "text/html")):
                         # Not a model reply at all (a gateway page, or a bare "OK"): never let
                         # that pass as an empty answer.

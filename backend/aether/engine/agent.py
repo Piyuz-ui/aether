@@ -147,7 +147,10 @@ class AetherAgent:
                 cut_off = False
                 stream = self.llm.chat_stream(model=model, messages=messages, tools=tools,
                                               options=self._options, think=s.think)
-                async for d in self._until_settled(stream, lambda: bool(calls)):
+                # Cloud providers report usage (what you're billed) only at the very end of a stream,
+                # so their streams are never cut short; the early stop is for small local models.
+                cloud = getattr(self.llm, "is_cloud", lambda _m: False)(model)
+                async for d in self._until_settled(stream, lambda: bool(calls) and not cloud):
                     if d.done and d.done_reason == "length":
                         cut_off = True
                     if d.thinking:

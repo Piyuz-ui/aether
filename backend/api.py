@@ -70,6 +70,8 @@ def build_context(settings: Settings, llm: Any = None, db_path: str | None = Non
         return await memory.extract_facts(llm, model, goal, answer)
 
     agent = AetherAgent(settings, llm=llm, memory_provider=memory.build_context, after_turn=learn)
+    if hasattr(llm, "usage_sink"):
+        llm.usage_sink = memory.usage.record  # every finished cloud request → Settings → Usage
     return AppContext(settings=settings, llm=llm, memory=memory, agent=agent,
                       mcp=MCPManager(settings.mcp_config), tts=TTSService(settings.data_dir / "tts"))
 
@@ -113,6 +115,17 @@ class HostIn(BaseModel):
     url: str = Field(min_length=3, max_length=200, pattern=r"^(https?://)?[A-Za-z0-9.\-\[\]:]+/?$")
     # optional second address for when you're away from home, usually the PC's Tailscale address
     remote_url: str | None = Field(default=None, max_length=200)
+
+
+class PriceIn(BaseModel):
+    model: str = Field(min_length=3, max_length=200)          # e.g. "openai:gpt-5"
+    input_per_m: float = Field(ge=0, le=10_000)                # USD per 1M input tokens
+    output_per_m: float = Field(ge=0, le=10_000)               # USD per 1M output tokens
+    cached_per_m: float | None = Field(default=None, ge=0, le=10_000)
+
+
+class BudgetIn(BaseModel):
+    monthly_usd: float | None = Field(default=None, ge=0, le=100_000)
 
 
 class KeyIn(BaseModel):
@@ -297,6 +310,34 @@ def create_app(settings: Settings | None = None, *, llm: Any = None,
                                                  "hint": f"Run: ollama pull {body.model}"})
         ctx.agent.set_model(body.model)
         return {"current": body.model, "cloud": pid is not None}
+
+    # ------------------------------------------------------------- usage
+    @app.get("/api/usage")
+    async def usage(request: Request, days: int = 30) -> dict[str, Any]:
+        """Cloud usage: this month and today, per model (tokens, context, cost), the last 14
+        days, the budget, and what each provider says is left on its free tier."""
+        ctx = ctx_of(request)
+        summary = ctx.memory.usage.summary(days=max(1, min(days, 365)))
+        limits = ctx.llm.rate_limits() if hasattr(ctx.llm, "rate_limits") else {}
+        summary["limits"] = [{"provider": pid, "label": PROVIDERS[pid].label, "at": v["at"],
+                              "windows": v["windows"]} for pid, v in limits.items()]
+        return summary
+
+    @app.put("/api/usage/prices")
+    async def set_price(body: PriceIn, request: Request) -> dict[str, Any]:
+        if split_model(body.model)[0] is None:
+            raise HTTPException(422, detail={"message": "Prices are for cloud models (e.g. openai:gpt-5)."})
+        ctx_of(request).memory.usage.set_price(body.model, body.input_per_m, body.output_per_m, body.cached_per_m)
+        return {"model": body.model, "saved": True}
+
+    @app.delete("/api/usage/prices/{model:path}")
+    async def clear_price(model: str, request: Request) -> dict[str, Any]:
+        return {"model": model, "removed": ctx_of(request).memory.usage.clear_price(model)}
+
+    @app.put("/api/usage/budget")
+    async def set_budget(body: BudgetIn, request: Request) -> dict[str, Any]:
+        ctx_of(request).memory.usage.set_budget(body.monthly_usd)
+        return {"monthly_usd": body.monthly_usd or None}
 
     # ---------------------------------------------------------- hardware
     @app.get("/api/hardware")

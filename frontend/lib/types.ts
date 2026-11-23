@@ -31,6 +31,8 @@ export type RunStats = {
   context_limit: number;
   context_pct: number;
   tokens_per_s: number;
+  /** Cloud models with a known price: what this answer cost. */
+  cost_usd?: number | null;
   model_calls: number;
   tools: { name: string; seconds: number }[];
   summary: string;
@@ -267,3 +269,32 @@ export type GpuLive =
   | { available: true; host: string; name: string; util_pct: number | null; vram_used_gb: number | null;
       vram_total_gb: number | null; temp_c: number | null; power_w: number | null }
   | { available: false; reason: "local" | "cloud" | "no_monitor"; host?: string };
+
+export type ModelPrice = { input_per_m: number; output_per_m: number; cached_per_m: number | null; source: "official" | "yours" | "free tier" };
+export type ModelUsage = {
+  model: string;
+  name: string;
+  provider: string;
+  provider_label: string;
+  requests: number;
+  prompt_tokens: number;
+  cached_tokens: number;
+  output_tokens: number;
+  /** null when the model has no price yet. */
+  cost_usd: number | null;
+  priced: boolean;
+  avg_context_pct: number;
+  max_context_pct: number;
+  avg_seconds: number;
+  last_used: number;
+  price: ModelPrice | null;
+};
+export type RateWindow = { remaining?: number; limit?: number; reset?: string };
+export type UsageSummary = {
+  month: { label: string; cost_usd: number; requests: number; prompt_tokens: number; output_tokens: number; unpriced_requests: number };
+  today: { cost_usd: number; requests: number; tokens: number };
+  budget: { monthly_usd: number | null; used_pct: number | null; state: "ok" | "near" | "over" | null };
+  by_model: ModelUsage[];
+  daily: { date: string; cost_usd: number; tokens: number; requests: number }[];
+  limits: { provider: string; label: string; at: number; windows: Record<string, RateWindow> }[];
+};

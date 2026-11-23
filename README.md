@@ -12,7 +12,7 @@
 ![Ollama](https://img.shields.io/badge/LLM-Ollama%20(local)-7DD3FC)
 ![MCP](https://img.shields.io/badge/MCP-client-A5B4FC)
 ![Voice](https://img.shields.io/badge/Voice-Kokoro--82M-5EEAD4)
-![Tests](https://img.shields.io/badge/tests-222%20passing-5EEAD4)
+![Tests](https://img.shields.io/badge/tests-229%20passing-5EEAD4)
 ![Privacy](https://img.shields.io/badge/data-local%20by%20default-0E2442)
 [![License: MIT](https://img.shields.io/badge/license-MIT-F0F9FF)](LICENSE)
 
@@ -195,7 +195,9 @@ Local models are always the default. To add a cloud model, open **Settings → C
 | DeepSeek | no (paid, cheap) | `DEEPSEEK_API_KEY` from [platform.deepseek.com](https://platform.deepseek.com/api_keys) | `deepseek:deepseek-chat`, … |
 | xAI Grok | no (paid) | `XAI_API_KEY` from [console.x.ai](https://console.x.ai) | `xai:grok-4`, … |
 
-Connected providers appear in the header's model menu, under the local models. Each provider's live model list is used when it can be fetched. While a cloud model is selected, your messages go to that provider, along with any memories and document passages AETHER adds to the prompt. Embeddings, the knowledge vault, memory storage and voice never leave your machine. Every provider except Claude is used through its OpenAI-compatible API, and only models that can call tools are listed. Claude uses the official Anthropic SDK with refusal fallbacks turned on. AETHER adapts to each provider's quirks on its own. For example, it learns which settings a model refuses and stops sending them, and it uses the tool-call id format Mistral requires.
+Connected providers appear in the header's model menu, under the local models. Each provider's live model list is used when it can be fetched. While a cloud model is selected, your messages go to that provider, along with any memories and document passages AETHER adds to the prompt. Embeddings, the knowledge vault, memory storage and voice never leave your machine. **Track what it costs.** The **Usage** tab records every cloud request. It shows this month's and today's spend, an optional monthly budget (amber at 80%, red when reached), a 14-day chart, and, per model, its requests, tokens in/out/cached, how full its context got and its cost. Free tiers also show the allowance they report as left (e.g. Groq's requests and tokens). Claude's prices are built in and free tiers count as $0. Prices that change often (OpenAI, DeepSeek, Grok, Hugging Face) aren't guessed: you enter them once, and they apply to past usage too. Each reply's stats chip shows what that answer cost.
+
+Every provider except Claude is used through its OpenAI-compatible API, and only models that can call tools are listed. Claude uses the official Anthropic SDK with refusal fallbacks turned on. AETHER adapts to each provider's quirks on its own. For example, it learns which settings a model refuses and stops sending them, and it uses the tool-call id format Mistral requires.
 </details>
 
 <details>

@@ -18,6 +18,7 @@ import type {
   Task,
   ToolInfo,
   TranscriptMessage,
+  UsageSummary,
 } from "./types";
 
 export const API_BASE = (process.env.NEXT_PUBLIC_AETHER_API ?? "http://127.0.0.1:8000").replace(/\/$/, "");
@@ -69,6 +70,11 @@ export const api = {
   providers: () => request<CloudProvider[]>("/api/providers"),
   hosts: () => request<NetworkHost[]>("/api/hosts"),
   hardware: () => request<HardwareCard[]>("/api/hardware"),
+  usage: () => request<UsageSummary>("/api/usage"),
+  setPrice: (model: string, input_per_m: number, output_per_m: number) =>
+    request("/api/usage/prices", json("PUT", { model, input_per_m, output_per_m })),
+  clearPrice: (model: string) => request(`/api/usage/prices/${model}`, json("DELETE")),
+  setBudget: (monthly_usd: number | null) => request("/api/usage/budget", json("PUT", { monthly_usd })),
   gpu: (model?: string) => request<GpuLive>(`/api/gpu${model ? `?model=${encodeURIComponent(model)}` : ""}`),
   setHost: (name: string, url: string, remoteUrl = "") =>
     request<NetworkHost>(`/api/hosts/${name}`, json("PUT", { url: url || remoteUrl, remote_url: url ? remoteUrl : "" })),

@@ -141,6 +141,8 @@ class CLI:
         self.settings = get_settings()
         self.llm = llm or router_from_settings(self.settings)
         self.memory = MemorySystem(self.settings, self.llm, db_path=db_path)
+        if hasattr(self.llm, "usage_sink"):
+            self.llm.usage_sink = self.memory.usage.record  # cloud usage counts here too
         set_memory(self.memory)
 
         async def learn(goal: str, answer: str, model_name: str) -> list[dict[str, Any]]:
