@@ -10,6 +10,7 @@ import { Globe, House, MonitorSmartphone, Plug, RefreshCw, Trash2 } from "lucide
 import { useEffect, useState } from "react";
 
 import { api, ApiError } from "@/lib/api";
+import { AddressEye, useHideAddresses } from "@/lib/privacy";
 import type { NetworkHost } from "@/lib/types";
 import { useLive } from "@/lib/useLive";
 
@@ -33,6 +34,7 @@ function Code({ children }: { children: string }) {
 
 function HostCard({ h, onRemove }: { h: NetworkHost; onRemove: () => void }) {
   const route = ROUTE[h.route ?? "home"];
+  const { show } = useHideAddresses();
   return (
     <div className="rounded-xl border border-white/[0.07] bg-white/[0.025] px-3 py-2.5">
       <div className="flex items-center gap-3">
@@ -60,7 +62,7 @@ function HostCard({ h, onRemove }: { h: NetworkHost; onRemove: () => void }) {
             <span className={clsx("inline-flex w-[5.5rem] shrink-0 items-center gap-1", a.active && h.online ? "text-seafoam" : "text-mist")}>
               {ROUTE[a.kind].icon}{a.kind === "tailscale" ? "Remote" : ROUTE[a.kind].label.replace(" network", "")}
             </span>
-            <span className="min-w-0 flex-1 truncate font-mono text-frost/80">{a.url.replace(/^https?:\/\//, "")}</span>
+            <span className="min-w-0 flex-1 truncate font-mono text-frost/80">{show(a.url.replace(/^https?:\/\//, ""))}</span>
             {a.active && h.online && <span className="text-[10px] uppercase tracking-wider text-seafoam">in use</span>}
           </div>
         ))}
@@ -86,6 +88,7 @@ export function HostsSection({ revision, onChanged, toast }: {
   const [guide, setGuide] = useState<"home" | "away" | null>(null);
 
   const existing = hosts.data?.find((h) => h.name === name.trim().toLowerCase());
+  const { hidden, show } = useHideAddresses();
   // Editing an existing computer: start from its saved addresses (e.g. to add the remote one).
   useEffect(() => {
     if (!existing) return;
@@ -103,7 +106,7 @@ export function HostsSection({ revision, onChanged, toast }: {
       const h = await api.setHost(name.trim().toLowerCase(), url.trim(), remote.trim());
       const missed = h.unreachable ?? [];
       toast(`${h.name} saved`, missed.length
-        ? `Using ${ROUTE[h.route ?? "home"].label}. ${missed.map((u) => u.replace(/^https?:\/\//, "")).join(", ")} didn't answer right now (is Tailscale on on both?), but it's saved for later.`
+        ? `Using ${ROUTE[h.route ?? "home"].label}. ${missed.map((u) => show(u.replace(/^https?:\/\//, ""))).join(", ")} didn't answer right now (is Tailscale on on both?), but it's saved for later.`
         : `${h.models.length} model${h.models.length === 1 ? "" : "s"} on it are in the model menu.`);
       setUrl("");
       setRemote("");
@@ -129,7 +132,7 @@ export function HostsSection({ revision, onChanged, toast }: {
 
   return (
     <section>
-      <PanelTitle title="Computers on your network"
+      <PanelTitle title="Computers on your network" action={<AddressEye />}
         hint="Run models on another computer's GPU, at home or from anywhere via Tailscale. Private: only your own devices can reach it." />
       <div className="glass-inset space-y-3 rounded-2xl p-3">
         {hosts.data?.map((h) => <HostCard key={h.name} h={h} onRemove={() => void remove(h.name)} />)}
@@ -148,7 +151,8 @@ export function HostsSection({ revision, onChanged, toast }: {
             <label className="block min-w-0">
               <span className="mb-1.5 flex items-center gap-1 text-[11px] font-medium text-mist"><House className="size-3" />Home address</span>
               <input value={url} onChange={(e) => setUrl(e.target.value)} spellCheck={false} autoComplete="off" inputMode="url"
-                onFocus={(e) => e.currentTarget.select()} className={clsx(inputClass, "h-10 font-mono")} placeholder="192.168.1.9" />
+                type={hidden ? "password" : "text"}
+              onFocus={(e) => e.currentTarget.select()} className={clsx(inputClass, "h-10 font-mono")} placeholder="192.168.1.9" />
             </label>
           </div>
           <label className="block">
@@ -156,6 +160,7 @@ export function HostsSection({ revision, onChanged, toast }: {
               <Globe className="size-3" />Remote address <span className="font-normal text-mist/70">· Tailscale, optional</span>
             </span>
             <input value={remote} onChange={(e) => setRemote(e.target.value)} spellCheck={false} autoComplete="off" inputMode="url"
+              type={hidden ? "password" : "text"}
               onFocus={(e) => e.currentTarget.select()} className={clsx(inputClass, "h-10 font-mono")} placeholder="100.x.y.z or pc-name.ts.net" />
           </label>
           <p className="text-[11px] leading-snug text-mist">

@@ -18,6 +18,7 @@ export type Prefs = {
   drawerOpen: boolean;
   voice: string; // Kokoro voice preset id
   speed: number; // 0.85 – 1.25
+  hideAddresses: boolean; // mask computers' IPs / URLs on screen
 };
 
 const DEFAULTS: Prefs = {
@@ -29,6 +30,7 @@ const DEFAULTS: Prefs = {
   drawerOpen: true,
   voice: "af_heart",
   speed: 1,
+  hideAddresses: false,
 };
 
 const KEY = "aether.prefs.v1";

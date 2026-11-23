@@ -13,6 +13,7 @@ import { Cable, CheckCircle2, CircleAlert, CircleOff, Cpu, Gauge, MemoryStick, M
 import { api } from "@/lib/api";
 import { jelly } from "@/lib/motion";
 import type { Availability, HardwareCard, LinkQuality, LoadedModel, NetworkLink } from "@/lib/types";
+import { AddressEye, useHideAddresses } from "@/lib/privacy";
 import { useLive } from "@/lib/useLive";
 
 import { Chip } from "../ui";
@@ -158,6 +159,7 @@ function LoadedRow({ m }: { m: LoadedModel }) {
 }
 
 function MachineCard({ c }: { c: HardwareCard }) {
+  const { show } = useHideAddresses();
   const sys = c.system;
   const gpu = sys?.gpus[0];
   const isMac = c.id === "local";
@@ -177,7 +179,7 @@ function MachineCard({ c }: { c: HardwareCard }) {
             )}
           </div>
           <div className="truncate text-[11px] text-mist">
-            {[sys?.hostname, sys?.cpu].filter(Boolean).join(" · ") || c.url}
+            {[sys?.hostname, sys?.cpu].filter(Boolean).join(" · ") || (c.url ? show(c.url) : "")}
           </div>
         </div>
       </div>
@@ -234,7 +236,8 @@ export function HardwareSection({ revision }: { revision: number }) {
   const hw = useLive(api.hardware, revision, () => 3000);
   return (
     <section>
-      <PanelTitle title="Hardware" hint="What runs your local models, live: GPU, memory and what's loaded on each machine." />
+      <PanelTitle title="Hardware" hint="What runs your local models, live: GPU, memory and what's loaded on each machine."
+        action={<AddressEye />} />
       <div className="glass-inset space-y-2.5 rounded-2xl p-3">
         {!hw.data && !hw.error && <p className="text-xs text-mist">Reading hardware…</p>}
         {hw.error && <p className="text-xs text-coral">{hw.error.message}</p>}
