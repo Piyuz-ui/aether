@@ -120,7 +120,7 @@ Every event is `{"type", "step", "ts", "data"}`.
 
 | type | data | Used for |
 |---|---|---|
-| `status` | `state`: `thinking` \| `using_tool` \| `awaiting_approval` \| `idle` | Drives the living orb |
+| `status` | `state`: `thinking` \| `using_tool` \| `awaiting_approval` \| `idle` | Drives the living symbiote (its body language per state) |
 | `token` | `text`, `channel`: `content` \| `thinking` | Live typing |
 | `thought` | `text` | The agent's reasoning before a tool call |
 | `tool_start` | `call_id`, `name`, `args`, `risk`, `icon` | Tool pill appears |
@@ -257,7 +257,7 @@ sequenceDiagram
     API->>K: synthesise (~6× faster than real time)
     K-->>UI: WAV
     UI->>UI: decodeAudioData → schedule at the exact end of the previous clip
-    UI->>UI: AnalyserNode → loudness → orb swell and halo
+    UI->>UI: AnalyserNode → loudness → symbiote membrane ripple
 ```
 
 Clips are scheduled on the `AudioContext` clock (`start(at)`, where `at` is when the previous clip ends), so playback is gapless. Synthesis is 5–6× faster than playback, so the next sentence is always decoded before the current one finishes. With auto-speak on, playback starts at the first *finished* sentence while the reply is still being written. Stop, a new question, or Listen on another reply aborts in-flight requests and stops the scheduled sources. Engines: Kokoro via MLX when it's importable, Kokoro via ONNX otherwise, and the browser's `speechSynthesis` as a last resort.

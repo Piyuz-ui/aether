@@ -17,7 +17,7 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-F0F9FF)](LICENSE)
 
 <!-- Record per docs/DEMO_SCRIPT.md → shot list, then save as docs/media/hero.gif -->
-![AETHER demo: the living orb, a live tool trace and the safety gate](docs/media/hero.gif)
+![AETHER demo: the living symbiote, a live tool trace and the safety gate](docs/media/hero.gif)
 
 </div>
 
@@ -46,9 +46,9 @@ It does this with **no cloud API**: a local model through [Ollama](https://ollam
 | 🔌 **MCP client** | Plug in external [Model Context Protocol](https://modelcontextprotocol.io) servers (filesystem, GitHub, …) with per-server approval policies |
 | 🎓 **Interactive study** | Quizzes become glass cards: multiple choice or 3D flip-cards. Weak topics are tracked and fed back into its memory |
 | 🗓️ **Planner** | Deadlines and timetable in SQLite. Natural dates (*"next Friday 5pm"*) resolved **in code**; .ics export with alarms |
-| 🎙️ **Neural voice** | Kokoro-82M, synthesised locally ~6× faster than real time, played **gaplessly** sentence by sentence, with an audio-reactive orb |
+| 🎙️ **Neural voice** | Kokoro-82M, synthesised locally ~6× faster than real time, played **gaplessly** sentence by sentence, with a symbiote that ripples to the voice |
 | 📊 **Telemetry** | Every reply shows its tool chain, steps, tokens, context-window use and latency |
-| ✨ **Liquid-glass UI** | Next.js + Framer Motion: drifting light, cursor parallax, frosted glass, spring physics and a living orb (with a Calm mode) |
+| ✨ **Liquid-glass UI** | Next.js + Framer Motion: drifting light, cursor parallax, frosted glass, spring physics and a living amoeba-like symbiote that reacts to what the agent is doing (with a Calm mode) |
 
 ## How it works
 
@@ -77,7 +77,7 @@ Full design: **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** (system and sequen
 |---|---|
 | ![Safety gate](docs/media/safety-gate.gif)<br/>**Safety gate.** A delete pauses the agent; Deny is focused by default | ![RAG](docs/media/rag-citations.gif)<br/>**Your notes, cited.** Answers come from your PDFs and slides, with page numbers |
 | ![Vision](docs/media/vision-timetable.gif)<br/>**Screenshot → actions.** A timetable photo becomes classes in the database | ![Quiz](docs/media/quiz-cards.gif)<br/>**Quiz cards.** Spring-animated cards; misses become weak topics |
-| ![Voice](docs/media/voice-orb.gif)<br/>**Natural voice.** The orb breathes with the actual speech | ![Telemetry](docs/media/telemetry.gif)<br/>**Telemetry.** The tool chain, tokens and latency of every reply |
+| ![Voice](docs/media/voice-orb.gif)<br/>**Natural voice.** The symbiote ripples with the actual speech | ![Telemetry](docs/media/telemetry.gif)<br/>**Telemetry.** The tool chain, tokens and latency of every reply |
 
 <sub>GIFs: record them with the shot list in [docs/DEMO_SCRIPT.md](docs/DEMO_SCRIPT.md).</sub>
 
@@ -196,7 +196,7 @@ backend/
   cli.py             Rich terminal interface
   tests/             148 tests (fake LLM, real fake MCP server, generated PDFs and slides)
 frontend/
-  components/        glass UI: orb, chat, tool pills, approval modal, drawer, quiz deck, …
+  components/        glass UI: symbiote, chat, tool pills, approval modal, drawer, quiz deck, …
   lib/               SSE client, agent state, gapless voice engine, prefs
 docs/                architecture, demo script
 start.sh             one-command launcher
