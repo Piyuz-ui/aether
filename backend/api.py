@@ -308,11 +308,11 @@ def create_app(settings: Settings | None = None, *, llm: Any = None,
         ctx = ctx_of(request)
         if not hasattr(ctx.llm, "set_host"):
             raise HTTPException(404, detail={"message": "Network computers aren't supported here."})
-        url = body.url.strip().rstrip("/")
-        if "://" not in url:
-            url = f"http://{url}"
-        if url.count(":") == 1:  # no port given: Ollama's default
-            url += ":11434"
+        url = normalize_host_url(body.url)
+        if url is None:
+            raise HTTPException(422, detail={
+                "message": f"'{body.url.strip()[:60]}' isn't a valid address.",
+                "hint": "Type just the PC's address once, e.g. 192.168.1.9 (run ipconfig on the PC to see it)."})
         try:
             await ctx.llm.set_host(name, url)
         except OllamaError as e:
@@ -653,6 +653,37 @@ def create_app(settings: Settings | None = None, *, llm: Any = None,
                  "semantic": h.semantic, "doc_id": h.doc_id} for h in hits]
 
     return app
+
+
+def normalize_host_url(raw: str) -> str | None:
+    """'192.168.1.9' → 'http://192.168.1.9:11434'. None if it isn't a real IP address or hostname."""
+    import ipaddress
+    import re
+    from urllib.parse import urlsplit
+
+    raw = raw.strip().rstrip("/")
+    try:
+        parts = urlsplit(raw if "://" in raw else f"http://{raw}")
+        host, port = parts.hostname, parts.port or 11434
+    except ValueError:  # e.g. a port that isn't a number
+        return None
+    if not host or parts.scheme not in ("http", "https") or parts.path not in ("", "/"):
+        return None
+    labels = host.split(".")
+    if all(label.isdigit() for label in labels):  # looks numeric: must be a real IPv4 address
+        try:
+            ipaddress.IPv4Address(host)
+        except ValueError:
+            return None
+    elif ":" in host:  # IPv6
+        try:
+            ipaddress.IPv6Address(host)
+        except ValueError:
+            return None
+        host = f"[{host}]"
+    elif not all(re.fullmatch(r"[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?", label) for label in labels):
+        return None
+    return f"{parts.scheme}://{host}:{port}"
 
 
 def _ics_text(value: str) -> str:

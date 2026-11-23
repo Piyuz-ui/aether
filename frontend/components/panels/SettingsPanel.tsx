@@ -126,44 +126,75 @@ function HostsSection({ revision, onChanged, toast }: {
     <section>
       <PanelTitle title="Computers on your network"
         hint="Run models on another computer's GPU (e.g. a gaming PC) over your home network. Still private: nothing goes to the internet." />
-      <div className="glass-inset space-y-2.5 rounded-2xl p-3">
+      <div className="glass-inset space-y-3 rounded-2xl p-3">
+        {/* connected computers */}
         {hosts.data?.map((h) => (
-          <div key={h.name} className="flex items-start gap-2.5">
-            <MonitorSmartphone className={clsx("mt-0.5 size-4 shrink-0", h.online ? "text-seafoam" : "text-mist")} />
+          <div key={h.name} className="flex items-center gap-3 rounded-xl border border-white/[0.07] bg-white/[0.025] px-3 py-2.5">
+            <div className={clsx("grid size-9 shrink-0 place-items-center rounded-lg",
+              h.online ? "bg-seafoam/[0.12] text-seafoam" : "bg-white/[0.05] text-mist")}>
+              <MonitorSmartphone className="size-4" />
+            </div>
             <div className="min-w-0 flex-1">
-              <div className="flex flex-wrap items-center gap-1.5">
-                <span className="text-sm text-frost">{h.name}</span>
+              <div className="flex items-center gap-1.5">
+                <span className="truncate text-sm font-medium text-frost">{h.name}</span>
                 <Chip tone={h.online ? "seafoam" : "coral"}>{h.online ? "online" : "offline"}</Chip>
                 {h.online && <Chip>{h.models.length} models</Chip>}
               </div>
-              <div className="font-mono text-[11px] text-mist">{h.url}</div>
-              {!h.online && <p className="text-[11px] text-mist">Turn it on and open Ollama there; it reconnects by itself.</p>}
+              <div className="truncate font-mono text-[11px] text-mist">{h.url}</div>
+              {!h.online && <p className="mt-0.5 text-[11px] leading-snug text-mist">Turn it on and open Ollama there. It reconnects by itself.</p>}
             </div>
-            <JiggleButton tone="ghost" className="px-2 py-1" aria-label={`Remove ${h.name}`} onClick={() => void remove(h.name)}>
-              <Trash2 className="size-3.5" />
+            <JiggleButton tone="ghost" className="size-8 shrink-0 rounded-lg p-0!" aria-label={`Remove ${h.name}`} onClick={() => void remove(h.name)}>
+              <Trash2 className="size-3.5 shrink-0" />
             </JiggleButton>
           </div>
         ))}
-        <form className="flex items-center gap-2" onSubmit={(e) => { e.preventDefault(); if (url.trim()) void add(); }}>
-          <input value={name} onChange={(e) => setName(e.target.value)} aria-label="Name for this computer"
-            className={clsx(inputClass, "w-20 shrink-0")} placeholder="pc" />
-          <input value={url} onChange={(e) => setUrl(e.target.value)} aria-label="Its address" spellCheck={false}
-            className={inputClass} placeholder="192.168.1.50" />
-          <JiggleButton type="submit" className="shrink-0 px-3 py-1.5 text-xs" disabled={busy || !url.trim() || !name.trim()}>
-            {busy ? "Checking…" : "Connect"}
+
+        {/* add a computer */}
+        <form className="space-y-3 rounded-xl border border-white/[0.07] bg-white/[0.025] p-3"
+          onSubmit={(e) => { e.preventDefault(); if (url.trim() && name.trim()) void add(); }}>
+          <div className="text-xs font-medium text-frost">
+            {hosts.data?.length ? "Add another computer" : "Add a computer"}
+          </div>
+          <div className="grid grid-cols-[minmax(0,2fr)_minmax(0,5fr)] gap-2.5">
+            <label className="block min-w-0">
+              <span className="mb-1.5 block text-[11px] font-medium text-mist">Name</span>
+              <input value={name} onChange={(e) => setName(e.target.value)} spellCheck={false} autoComplete="off"
+                className={clsx(inputClass, "h-10")} placeholder="pc" />
+            </label>
+            <label className="block min-w-0">
+              <span className="mb-1.5 block text-[11px] font-medium text-mist">Address</span>
+              <input value={url} onChange={(e) => setUrl(e.target.value)} spellCheck={false} autoComplete="off" inputMode="url"
+                onFocus={(e) => e.currentTarget.select()} /* a paste replaces the old text instead of adding to it */
+                className={clsx(inputClass, "h-10 font-mono")} placeholder="192.168.1.9" />
+            </label>
+          </div>
+          <p className="text-[11px] leading-snug text-mist">
+            The address the setup script printed (or <span className="font-mono">ipconfig</span> on the PC). Port 11434 is added for
+            you. Its models appear as <span className="font-mono text-frost/80">model@{name.trim().toLowerCase() || "pc"}</span>.
+          </p>
+          <JiggleButton type="submit" tone="primary" className="h-10 w-full rounded-xl"
+            disabled={busy || !url.trim() || !name.trim()}>
+            {busy ? <><RefreshCw className="size-3.5 animate-spin" /> Checking…</> : <><Plug className="size-3.5" /> Connect</>}
           </JiggleButton>
+          {err && <ErrorNote message={err.message} hint={err.hint} />}
         </form>
-        {err && <ErrorNote message={err.message} hint={err.hint} />}
-        <button type="button" onClick={() => setGuide((g) => !g)} className="text-[11px] text-glacier underline-offset-2 hover:underline">
-          {guide ? "Hide" : "How to set up a Windows PC (RTX GPU)"}
+
+        {/* setup guide */}
+        <button type="button" onClick={() => setGuide((g) => !g)} aria-expanded={guide}
+          className="flex w-full items-center justify-between rounded-lg px-1 text-[11.5px] text-glacier hover:text-frost">
+          How to set up a Windows PC (RTX GPU)
+          <span aria-hidden>{guide ? "−" : "+"}</span>
         </button>
         {guide && (
-          <ol className="list-decimal space-y-1.5 pl-4 text-[11px] leading-relaxed text-frost/85">
+          <ol className="list-decimal space-y-2 pl-5 text-[11px] leading-relaxed text-frost/85">
             <li>On the PC, install the latest Ollama from <span className="font-mono text-glacier">ollama.com</span> (recent versions support RTX 50-series GPUs).</li>
-            <li>Copy <span className="font-mono text-glacier">pc/setup-ollama-pc.ps1</span> from this project to the PC. Right-click PowerShell → <i>Run as administrator</i>, then run:
-              <code className="mt-1 block rounded-lg bg-black/30 px-2 py-1 font-mono text-[10.5px] text-glacier">powershell -ExecutionPolicy Bypass -File setup-ollama-pc.ps1</code>
-              It shares Ollama on your home network only, opens port 11434 for private networks, downloads good models for a 16 GB GPU, and prints the PC&apos;s address.</li>
-            <li>Type that address above and press Connect. The PC&apos;s models appear in the model menu as <span className="font-mono">model@pc</span>.</li>
+            <li>Open PowerShell with <i>Run as administrator</i> and download the setup script:
+              <code className="mt-1 block break-all rounded-lg bg-black/30 px-2 py-1.5 font-mono text-[10.5px] text-glacier">Invoke-WebRequest https://raw.githubusercontent.com/Piyuz-ui/aether/main/pc/setup-ollama-pc.ps1 -OutFile &quot;$env:USERPROFILE\Downloads\setup-ollama-pc.ps1&quot;</code>
+            </li>
+            <li>Run it:
+              <code className="mt-1 block break-all rounded-lg bg-black/30 px-2 py-1.5 font-mono text-[10.5px] text-glacier">powershell -ExecutionPolicy Bypass -File &quot;$env:USERPROFILE\Downloads\setup-ollama-pc.ps1&quot;</code>
+              It shares Ollama on your home network only, opens port 11434 for private networks, downloads models for a 16 GB GPU and prints the PC&apos;s address.</li>
+            <li>Enter that address above and press Connect.</li>
           </ol>
         )}
       </div>

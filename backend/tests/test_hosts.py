@@ -144,3 +144,19 @@ def test_api_adds_switches_to_and_removes_a_pc(tmp_path: Path) -> None:
         assert client.delete("/api/hosts/pc").status_code == 200
         assert "AETHER_OLLAMA_HOSTS" not in env.read_text()
         assert client.get("/api/health").json()["model"] != "qwen3:14b@pc"
+
+
+@pytest.mark.parametrize("raw,expected", [
+    ("192.168.1.9", "http://192.168.1.9:11434"),
+    (" http://192.168.1.9:11434/ ", "http://192.168.1.9:11434"),
+    ("my-pc.local", "http://my-pc.local:11434"),
+    ("100.64.0.7:8080", "http://100.64.0.7:8080"),
+    ("192.168.1.9192.168.1.9192.168.1.9", None),   # pasted three times
+    ("192.168.1.300", None),
+    ("192.168.1.9 192.168.1.9", None),
+    ("http://pc:abc", None),
+    ("ftp://192.168.1.9", None),
+])
+def test_host_addresses_are_validated(raw: str, expected: str | None) -> None:
+    import api
+    assert api.normalize_host_url(raw) == expected
