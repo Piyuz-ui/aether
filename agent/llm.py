@@ -6,6 +6,8 @@ from typing import Any
 
 import requests
 
+from .metrics import CallStats
+
 THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL)
 
 
@@ -28,6 +30,7 @@ class OllamaClient:
         self.think = think
         self.timeout = timeout
         self._send_think = True  # turned off if the model rejects the parameter
+        self.last_stats: CallStats | None = None  # usage numbers from the latest chat call
 
     # ------------------------------------------------------------------ health
     def is_up(self) -> bool:
@@ -71,7 +74,9 @@ class OllamaClient:
                     f"Model '{self.model}' doesn't support tool calling. "
                     "Try qwen3, qwen2.5, llama3.1 or mistral-nemo.")
             raise OllamaError(f"Ollama error {r.status_code}: {err}")
-        return r.json()["message"]
+        data = r.json()
+        self.last_stats = CallStats.from_ollama(data)
+        return data["message"]
 
     # -------------------------------------------------------------- embeddings
     def embed(self, texts: list[str], model: str) -> list[list[float]]:

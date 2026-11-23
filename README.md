@@ -65,10 +65,14 @@ python main.py web      # web app at http://localhost:8501
 python main.py voice    # push-to-talk voice assistant
 ```
 
-Put PDFs or notes in `documents/` (or upload them in the web app). Coding tasks use the `workspace/` folder.
+**Chat with a document:** in the web app, click the 📎 button in the message box, attach a PDF, TXT or MD file, and ask about it. In the terminal, use `/attach path/to/file.pdf your question`. Short documents are read in full; long ones are searched page by page. Answers cite page numbers, and follow-up questions stay on that document until you start a new conversation.
+
+**Monitoring:** every reply shows how long it took, tokens in and out, how full the model's context window is, and generation speed (tokens per second). The web sidebar has a Monitoring panel with session totals, a context usage bar (it warns when the context is over 85% full) and a response-time chart. In the terminal, type `/stats`. Every reply is also logged to `data/metrics.jsonl`.
+
+You can also put files in `documents/` yourself. Coding tasks use the `workspace/` folder.
 
 ### Terminal commands
-`/help` · `/tasks` · `/memory` · `/tools` · `/model <name>` · `/reset` · `/exit`
+`/help` · `/attach` · `/stats` · `/tasks` · `/memory` · `/tools` · `/model <name>` · `/reset` · `/exit`
 
 ## Project structure
 

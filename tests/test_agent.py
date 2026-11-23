@@ -115,3 +115,54 @@ def test_notes_written_in_reply_are_saved_automatically():
     reply = agent.chat("make notes of my OS pdf")
     assert agent.last_notes and agent.last_notes[0]["title"] == "Deadlock"
     assert "/fake" not in reply and "Saved as note #" in reply
+
+
+def test_attached_document_text_goes_into_the_message():
+    from agent.config import DOCS_DIR
+    doc = DOCS_DIR / "paging.md"
+    doc.write_text("Paging divides memory into fixed-size frames of 4 KB.")
+    llm = FakeLLM([say("4 KB (p. 1)"), say("follow-up")])
+    agent = Agent(Settings(), llm=llm)
+    agent.chat("what is the frame size?", attachments=[doc])
+    user_msg = llm.seen[0][-1]["content"]
+    assert "fixed-size frames of 4 KB" in user_msg and "[Attached document: paging.md" in user_msg
+    assert "FOCUS" in llm.seen[0][0]["content"] and "paging.md" in llm.seen[0][0]["content"]
+    agent.chat("and why?")  # follow-ups keep the focus and still see the document
+    assert "paging.md" in llm.seen[1][0]["content"]
+    assert any("fixed-size frames" in m["content"] for m in llm.seen[1])
+    agent.reset()
+    assert agent.active_docs == []
+
+
+def test_long_attachment_is_left_to_search_tools():
+    from agent.config import DOCS_DIR
+    doc = DOCS_DIR / "big.txt"
+    doc.write_text("lorem ipsum " * 5000)
+    llm = FakeLLM([say("ok")])
+    Agent(Settings(), llm=llm).chat("summarise", attachments=[doc])
+    user_msg = llm.seen[0][-1]["content"]
+    assert "too long" in user_msg and "lorem ipsum lorem" not in user_msg
+
+
+def test_turn_stats_are_recorded():
+    from agent.metrics import CallStats, Monitor
+    llm = FakeLLM([call("get_datetime"), say("It's Monday.")])
+    stats = iter([CallStats(prompt_tokens=1000, output_tokens=20, total_s=1.0, gen_s=0.5),
+                  CallStats(prompt_tokens=1100, cached_tokens=1000, output_tokens=40,
+                            total_s=2.0, gen_s=1.5)])
+    real_chat = llm.chat
+
+    def chat(messages, tools=None):
+        llm.last_stats = next(stats)
+        return real_chat(messages, tools)
+
+    llm.chat = chat
+    agent = Agent(Settings(), llm=llm)
+    agent.monitor = Monitor(log_path=agent.monitor.log_path.with_name("test_metrics.jsonl"))
+    agent.chat("what day is it?")
+    s = agent.last_stats
+    assert (s.prompt_tokens, s.output_tokens, s.context_used) == (2100, 60, 1140)
+    assert s.tokens_per_s == 30.0 and [n for n, _ in s.tools] == ["get_datetime"]
+    assert "2,100 in / 60 out tokens" in s.summary()
+    assert agent.monitor.session()["total_tokens"] == 2160
+    assert agent.monitor.history()[-1]["context_used"] == 1140

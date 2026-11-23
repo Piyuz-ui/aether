@@ -78,13 +78,22 @@ def read_document(name: str, start_page: int = 1, end_page: int = 0) -> str:
 
 @tool("Search across all study documents for a word or phrase. Returns matching "
       "snippets with file name and page number.",
-      params={"query": "Words to look for"}, category="study")
-def search_documents(query: str) -> str:
+      params={"query": "Words to look for",
+              "name": "Only search this document (file name or unique part of it). "
+                      "Empty = all documents"},
+      category="study")
+def search_documents(query: str, name: str = "") -> str:
     terms = [t for t in re.findall(r"\w+", query.lower()) if len(t) > 2]
     if not terms:
         return "Give me a more specific query."
+    paths = _documents()
+    if name:
+        one = _find(name)
+        if not one:
+            return f"Couldn't find a single document matching '{name}'.\n{list_documents()}"
+        paths = [one]
     hits = []
-    for path in _documents():
+    for path in paths:
         for page_no, text in enumerate(get_pages(path), start=1):
             low = text.lower()
             score = sum(low.count(t) for t in terms)

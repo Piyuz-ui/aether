@@ -3,18 +3,23 @@ from __future__ import annotations
 
 import json
 import re
+import time
 from datetime import date, datetime, timedelta
+from pathlib import Path
 from typing import Callable
 
 from .config import DOCS_DIR, ROOT, WORKSPACE_DIR, Settings
 from .llm import OllamaClient, OllamaError, strip_thinking
 from .memory import Memory
+from .metrics import Monitor, TurnStats
 from .tools import CONTEXT, REGISTRY, coerce_args
 from .storage import get_store
 from .tools.personal import export_note
-from .tools.study import _documents
+from .tools.study import _documents, get_pages
 
 MAX_TOOL_OUTPUT = 12000
+HISTORY_CHARS = 30000     # ≈ 8k tokens of past conversation, leaves room in a 16k context
+INLINE_DOC_CHARS = 14000  # attached documents up to this size go straight into the prompt
 NOTE_ID_RE = re.compile(r"Saved note #(\d+)")
 NOTES_REQUEST_RE = re.compile(r"\bnotes?\b", re.IGNORECASE)
 # A trailing "the notes have been saved in …" line the model may invent.
@@ -60,7 +65,17 @@ How to work:
 
 Documents the user has uploaded (newest first; "the document/PDF I uploaded" means the first one):
 {documents}
-{memories}"""
+{focus}{memories}"""
+
+FOCUS_PROMPT = """
+FOCUS: the user is asking about the document(s) they attached in this chat: {names}.
+- Answer from these documents, not from general knowledge, and cite page numbers (e.g. "p. 2").
+- If the full text is already in the conversation, use it. If not, call read_document or
+  search_documents with name="<file name>" before answering. Never answer about a document
+  you haven't read.
+- If the document doesn't contain the answer, say so plainly. Then you may add general knowledge,
+  clearly labelled "Not from your document:".
+"""
 
 
 def _calendar(days: int = 21) -> str:
@@ -81,6 +96,28 @@ def _document_list(limit: int = 15) -> str:
     return "\n".join(lines)
 
 
+def attachment_block(paths: list[Path]) -> str:
+    """Text appended to the user's message for files they attached. Short documents go in
+    whole, so the model reads the actual content. Long ones are left to the search tools."""
+    blocks, budget = [], INLINE_DOC_CHARS
+    for path in paths:
+        pages = get_pages(path)
+        text = "\n".join(f"--- page {i} ---\n{t.strip()}" for i, t in enumerate(pages, 1))
+        n = len(pages)
+        if sum(len(t.strip()) for t in pages) < 20:
+            blocks.append(f"[Attached: {path.name}, {n} pages, but no readable text was found. "
+                          "It is probably a scanned image. Tell the user.]")
+        elif len(text) <= budget:
+            budget -= len(text)
+            blocks.append(f"[Attached document: {path.name}, {n} pages. Full text:]\n{text}\n"
+                          f"[End of {path.name}]")
+        else:
+            blocks.append(f"[Attached document: {path.name}, {n} pages. It is too long to include "
+                          f"here, so use search_documents(query, name=\"{path.name}\") and "
+                          "read_document to find the relevant pages before answering.]")
+    return "\n\n".join(blocks)
+
+
 class Agent:
     def __init__(self, settings: Settings | None = None, *,
                  confirm: ConfirmFn | None = None, on_event: EventFn | None = None,
@@ -96,6 +133,9 @@ class Agent:
         self.on_event = on_event or (lambda kind, payload: None)
         self.turns: list[list[dict]] = []  # each turn = user msg + tool msgs + reply
         self.last_notes: list[dict] = []   # notes saved during the latest turn
+        self.active_docs: list[str] = []   # documents attached in this chat (answers focus on them)
+        self.monitor = Monitor()
+        self.last_stats: TurnStats | None = None  # tokens / context / timing of the latest turn
 
     # ---------------------------------------------------------------- helpers
     @property
@@ -108,6 +148,7 @@ class Agent:
 
     def reset(self) -> None:
         self.turns.clear()
+        self.active_docs = []
 
     def tool_schemas(self) -> list[dict]:
         return [t.schema() for t in REGISTRY.values()]
@@ -125,7 +166,19 @@ class Agent:
             now=datetime.now().strftime("%A %d %B %Y, %H:%M"),
             calendar=_calendar(),
             documents=_document_list(),
+            focus=FOCUS_PROMPT.format(names=", ".join(self.active_docs)) if self.active_docs else "",
             docs=DOCS_DIR, workspace=WORKSPACE_DIR, project=ROOT, memories=memories)}
+
+    def _recent_history(self) -> list[dict]:
+        """Latest turns that fit the history budget, so big documents can't overflow context."""
+        kept, used = [], 0
+        for past in reversed(self.turns[-self.settings.history_turns:]):
+            size = sum(len(m.get("content") or "") for m in past)
+            if kept and used + size > HISTORY_CHARS:
+                break
+            kept.append(past)
+            used += size
+        return [m for past in reversed(kept) for m in past]
 
     def _run_tool(self, name: str, raw_args) -> str:
         t = REGISTRY.get(name)
@@ -151,11 +204,18 @@ class Agent:
         return result
 
     # ------------------------------------------------------------- main loop
-    def chat(self, user_text: str) -> str:
-        turn: list[dict] = [{"role": "user", "content": user_text}]
-        history = [m for past in self.turns[-self.settings.history_turns:] for m in past]
+    def chat(self, user_text: str, attachments: list[Path] | None = None) -> str:
+        """Answer one user message. attachments: document files the user attached to it."""
+        content = user_text
+        if attachments:
+            self.active_docs = [p.name for p in attachments]
+            content = f"{user_text}\n\n{attachment_block(attachments)}"
+        turn: list[dict] = [{"role": "user", "content": content}]
+        history = self._recent_history()
         messages = [self._system_message(user_text), *history, *turn]
         tools = self.tool_schemas()
+        stats = TurnStats(model=self.llm.model, context_limit=self.settings.context_length)
+        started = time.perf_counter()
 
         reply = ""
         for _ in range(self.settings.max_steps):
@@ -164,6 +224,8 @@ class Agent:
             except OllamaError as e:
                 reply = f"⚠️ {e}"
                 break
+            if call_stats := getattr(self.llm, "last_stats", None):
+                stats.calls.append(call_stats)
             content = strip_thinking(msg.get("content", ""))
             calls = msg.get("tool_calls") or []
             if not calls:
@@ -177,7 +239,9 @@ class Agent:
                 fn = call.get("function", {})
                 name, args = fn.get("name", ""), fn.get("arguments", {})
                 self.on_event("tool_call", {"name": name, "args": args})
+                t0 = time.perf_counter()
                 result = self._run_tool(name, args)
+                stats.tools.append((name, time.perf_counter() - t0))
                 self.on_event("tool_result", {"name": name, "result": result})
                 tool_msg = {"role": "tool", "content": result, "tool_name": name}
                 messages.append(tool_msg)
@@ -186,6 +250,10 @@ class Agent:
             reply = "I ran out of steps before finishing. Tell me to continue, or break the task up."
 
         reply = self._collect_notes(user_text, turn, reply)
+        stats.wall_s = time.perf_counter() - started
+        self.last_stats = stats
+        if stats.calls:
+            self.monitor.record(stats)
         turn.append({"role": "assistant", "content": reply})
         self.turns.append(turn)
         return reply
