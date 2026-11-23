@@ -4,15 +4,22 @@ from __future__ import annotations
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import Field
+from pydantic import AliasChoices, Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 BACKEND_DIR = Path(__file__).resolve().parent.parent
+ENV_FILE = BACKEND_DIR / ".env"
+
+
+def _key(env: str, *more: str) -> SecretStr:
+    """An optional API key, read from its usual environment variable name."""
+    return Field(default=SecretStr(""),
+                 validation_alias=AliasChoices(f"AETHER_{env}", env, *more))  # type: ignore[return-value]
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_prefix="AETHER_", env_file=BACKEND_DIR / ".env",
-                                      extra="ignore")
+    model_config = SettingsConfigDict(env_prefix="AETHER_", env_file=ENV_FILE,
+                                      extra="ignore", populate_by_name=True)
 
     # --- model -------------------------------------------------------------
     ollama_url: str = "http://localhost:11434"
@@ -32,6 +39,20 @@ class Settings(BaseSettings):
     tool_call_grace_s: float = 2.5
     think: bool = False              # let reasoning models think out loud (shown live)
     request_timeout_s: float = 300.0
+
+    # --- optional cloud brains (off unless a key is set; see .env.example) ---------
+    gemini_api_key: SecretStr = _key("GEMINI_API_KEY", "GOOGLE_API_KEY")
+    groq_api_key: SecretStr = _key("GROQ_API_KEY")
+    openrouter_api_key: SecretStr = _key("OPENROUTER_API_KEY")
+    anthropic_api_key: SecretStr = _key("ANTHROPIC_API_KEY")
+    cloud_max_output_tokens: int = 8192     # Gemini / Groq / OpenRouter, per call
+    claude_max_output_tokens: int = 16000   # Claude, per call (includes its thinking)
+
+    def cloud_keys(self) -> dict[str, str]:
+        return {"gemini": self.gemini_api_key.get_secret_value(),
+                "groq": self.groq_api_key.get_secret_value(),
+                "openrouter": self.openrouter_api_key.get_secret_value(),
+                "claude": self.anthropic_api_key.get_secret_value()}
 
     # --- agent loop ----------------------------------------------------------
     max_steps: int = 8

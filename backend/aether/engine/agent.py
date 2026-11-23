@@ -109,7 +109,8 @@ class AetherAgent:
                         hint="Pull a vision model, e.g.: ollama pull qwen3.5:4b (or gemma3, llava).")
                 switched_for_vision = vision_model != model
                 model = vision_model
-            stats = RunStats(model=model, context_limit=s.context_length)
+            limit_fn = getattr(self.llm, "context_limit", None)
+            stats = RunStats(model=model, context_limit=limit_fn(model) if limit_fn else s.context_length)
             yield ev(EventType.STATUS, state=AgentState.THINKING, run_id=run_id, model=model)
             if switched_for_vision:
                 yield ev(EventType.THOUGHT, kind="info",
@@ -204,9 +205,11 @@ class AetherAgent:
                 if content or thinking:
                     yield ev(EventType.THOUGHT, text=content or thinking)
                 normalized = [self._normalize_call(c) for c in calls]
+                # Keep the backend's call ids: cloud APIs pair each result with its call by id.
                 assistant_msg = {"role": "assistant", "content": content,
-                                 "tool_calls": [{"function": {"name": n, "arguments": a}}
-                                                for n, a, _ in normalized]}
+                                 "tool_calls": [{**({"id": c["id"]} if c.get("id") else {}),
+                                                 "function": {"name": n, "arguments": a}}
+                                                for c, (n, a, _) in zip(calls, normalized)]}
                 messages.append(assistant_msg)
                 turn.append(assistant_msg)
 

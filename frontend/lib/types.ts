@@ -106,6 +106,28 @@ export type Health = {
   embeddings_hint: string | null;
   tools: number;
   context_length: number;
+  cloud?: boolean;
+  provider?: string | null;
+};
+
+export type CloudModel = { id: string; name: string; vision: boolean; context: number };
+export type CloudProvider = {
+  id: string;
+  label: string;
+  free: boolean;
+  configured: boolean;
+  key_env: string;
+  key_url: string;
+  note: string;
+  models: CloudModel[];
+  error: { message: string; hint?: string } | null;
+};
+
+export type ModelList = {
+  models: string[];
+  current: string;
+  local_error?: { message: string; hint?: string } | null;
+  cloud?: CloudProvider[];
 };
 
 export type Task = {

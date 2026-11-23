@@ -6,6 +6,8 @@ export type McpServer = {
 
 import type {
   ClassSlot,
+  CloudProvider,
+  ModelList,
   Fact,
   Health,
   KnowledgeDoc,
@@ -59,8 +61,12 @@ const json = (method: string, body?: unknown): RequestInit => ({
 export const api = {
   health: () => request<Health>("/api/health"),
   tools: () => request<ToolInfo[]>("/api/tools"),
-  models: () => request<{ models: string[]; current: string }>("/api/models"),
-  setModel: (model: string) => request<{ current: string }>("/api/models", json("POST", { model })),
+  models: () => request<ModelList>("/api/models"),
+  setModel: (model: string) => request<{ current: string; cloud?: boolean }>("/api/models", json("POST", { model })),
+  providers: () => request<CloudProvider[]>("/api/providers"),
+  setProviderKey: (id: string, key: string) =>
+    request<CloudProvider>(`/api/providers/${id}/key`, json("PUT", { key })),
+  removeProviderKey: (id: string) => request<{ removed: string }>(`/api/providers/${id}/key`, json("DELETE")),
 
   decide: (approvalId: string, approved: boolean, reason = "") =>
     request(`/api/approvals/${approvalId}`, json("POST", { approved, reason })),

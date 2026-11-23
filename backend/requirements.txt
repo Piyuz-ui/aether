@@ -1,5 +1,6 @@
 # ---- Phase 1: core agent + CLI ----
 httpx==0.28.1
+anthropic==2.12.0
 rich==15.0.0
 ddgs==9.16.1
 pydantic==2.14.4

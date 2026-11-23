@@ -272,6 +272,7 @@ export function AetherApp() {
                   {health?.model && <span className="text-mist/70">·</span>}
                   {health?.model && (
                     <ModelSwitcher current={health.model} disabled={agent.busy} toast={toast}
+                      onOpenSettings={() => { setTab("settings"); setPref("drawerOpen", true); }}
                       onSwitched={(m) => { setHealth((h) => (h ? { ...h, model: m, model_note: null } : h)); void loadHealth(); }} />
                   )}
                 </div>

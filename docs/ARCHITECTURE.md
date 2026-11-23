@@ -1,6 +1,6 @@
 # AETHER: system architecture
 
-AETHER is a local-first autonomous agent. A small, readable Python engine runs a ReAct-style tool-calling loop against a local Ollama model. Every step of that loop is published as a typed event, so the terminal, the API and the web UI all show the same live trace.
+AETHER is a local-first autonomous agent. A small, readable Python engine runs a ReAct-style tool-calling loop against a local Ollama model (or, if you opt in, a cloud model: Gemini, Groq, OpenRouter or Claude). A `ModelRouter` picks the backend from the model name (`gemini:…`, `claude:…`), so the engine never knows the difference. Embeddings always stay on Ollama. Every step of that loop is published as a typed event, so the terminal, the API and the web UI all show the same live trace.
 
 ## 1. Big picture
 
@@ -143,6 +143,8 @@ ai agent/
 │   │   ├── workspace.py           path-jail for all file access
 │   │   ├── llm/
 │   │   │   ├── ollama.py          async streaming client, model resolution, errors with hints
+│   │   │   ├── cloud.py           Gemini/Groq/OpenRouter (OpenAI-compatible) + Claude (Anthropic SDK) adapters
+│   │   │   ├── router.py          routes each model name to Ollama or a cloud provider; live key management
 │   │   │   └── parsing.py         tool-call extraction from text + lenient JSON repair
 │   │   ├── engine/
 │   │   │   ├── agent.py           the ReAct loop

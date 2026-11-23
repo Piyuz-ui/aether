@@ -12,8 +12,8 @@
 ![Ollama](https://img.shields.io/badge/LLM-Ollama%20(local)-7DD3FC)
 ![MCP](https://img.shields.io/badge/MCP-client-A5B4FC)
 ![Voice](https://img.shields.io/badge/Voice-Kokoro--82M-5EEAD4)
-![Tests](https://img.shields.io/badge/tests-148%20passing-5EEAD4)
-![Privacy](https://img.shields.io/badge/data-never%20leaves%20your%20machine-0E2442)
+![Tests](https://img.shields.io/badge/tests-166%20passing-5EEAD4)
+![Privacy](https://img.shields.io/badge/data-local%20by%20default-0E2442)
 [![License: MIT](https://img.shields.io/badge/license-MIT-F0F9FF)](LICENSE)
 
 <!-- Record per docs/DEMO_SCRIPT.md → shot list, then save as docs/media/hero.gif -->
@@ -32,7 +32,7 @@ A chatbot answers. **AETHER works.** Give it a goal and it runs an explicit **Re
 >
 > ⚡ `4 steps · add_class → add_class → add_class · 12.8s · local`
 
-It does this with **no cloud API**: a local model through [Ollama](https://ollama.com), and a local SQLite memory, vector search and neural voice.
+It does this with **no cloud API**: a local model through [Ollama](https://ollama.com), and a local SQLite memory, vector search and neural voice. When you want more power, you can opt in to a **cloud brain** (Gemini, Groq or OpenRouter on their free tiers, or Claude) per conversation. The UI marks it clearly, and memory, documents and voice stay local.
 
 ## Highlights
 
@@ -154,6 +154,21 @@ cd backend && python -m pytest -q
 </details>
 
 <details>
+<summary><b>Add cloud brains (optional)</b></summary>
+
+Local models are always the default. To add a cloud model, open **Settings → Cloud brains**, paste a key and press **Connect**. AETHER checks the key with the provider, then saves it to `backend/.env` (gitignored, readable only by you). You can also put the key in `backend/.env` yourself:
+
+| Provider | Free tier | Key | Model names |
+|---|---|---|---|
+| Google Gemini | yes | `GEMINI_API_KEY` from [AI Studio](https://aistudio.google.com/apikey) | `gemini:gemini-2.5-flash`, … |
+| Groq | yes | `GROQ_API_KEY` from [console.groq.com](https://console.groq.com/keys) | `groq:llama-3.3-70b-versatile`, … |
+| OpenRouter | yes (`:free` models) | `OPENROUTER_API_KEY` from [openrouter.ai](https://openrouter.ai/keys) | `openrouter:<model>:free` |
+| Anthropic Claude | no (paid) | `ANTHROPIC_API_KEY` from [the Claude Console](https://platform.claude.com/settings/keys) | `claude:claude-opus-5-5`, `claude:claude-sonnet-5-5`, `claude:claude-haiku-5-5` |
+
+Connected providers appear in the header's model menu, under the local models. Each provider's live model list is used when it can be fetched. While a cloud model is selected, your messages go to that provider, along with any memories and document passages AETHER adds to the prompt. Embeddings, the knowledge vault, memory storage and voice never leave your machine. Gemini, Groq and OpenRouter use their OpenAI-compatible APIs. Claude uses the official Anthropic SDK with refusal fallbacks turned on.
+</details>
+
+<details>
 <summary><b>Connect MCP servers</b></summary>
 
 Copy `backend/mcp_servers.example.json` to `backend/mcp_servers.json`. It uses the same format as Claude Desktop, plus two optional keys:
@@ -187,7 +202,7 @@ Set these in `backend/.env` (see `.env.example`):
 ```
 backend/
   aether/engine/     ReAct loop, safety broker, prompts, sessions
-  aether/llm/        async Ollama client (streaming, capabilities) + tool-call repair parser
+  aether/llm/        async Ollama client, optional cloud providers + model router, tool-call repair parser
   aether/tools/      20 tools via the @tool registry (schemas from type hints)
   aether/memory/     SQLite store, hybrid RAG, facts, tasks, quizzes, sessions
   aether/mcp/        dependency-free MCP stdio client + server manager

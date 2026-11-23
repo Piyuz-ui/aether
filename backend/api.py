@@ -27,7 +27,10 @@ from sse_starlette.sse import EventSourceResponse
 from aether import __version__
 from aether.config import Settings, get_settings
 from aether.engine import AetherAgent
-from aether.llm.ollama import OllamaClient, OllamaError
+from aether.config import ENV_FILE
+from aether.llm.cloud import PROVIDERS, split_model
+from aether.llm.ollama import OllamaError
+from aether.llm.router import router_from_settings, save_env_value
 from aether.memory import MemorySystem
 from aether.memory.knowledge import KnowledgeError
 from aether.mcp import MCPManager
@@ -57,7 +60,7 @@ class AppContext:
 
 
 def build_context(settings: Settings, llm: Any = None, db_path: str | None = None) -> AppContext:
-    llm = llm or OllamaClient(settings.ollama_url, timeout_s=settings.request_timeout_s)
+    llm = llm or router_from_settings(settings)
     memory = MemorySystem(settings, llm, db_path=db_path)
     set_memory(memory)
 
@@ -103,6 +106,10 @@ class ApprovalRequestBody(BaseModel):
 
 class ModelChoice(BaseModel):
     model: str
+
+
+class KeyIn(BaseModel):
+    key: str = Field(min_length=8, max_length=400, pattern=r"^[\x21-\x7e]+$")  # no spaces/newlines
 
 
 class SessionPatch(BaseModel):
@@ -202,41 +209,98 @@ def create_app(settings: Settings | None = None, *, llm: Any = None,
     async def health(request: Request) -> dict[str, Any]:
         ctx = ctx_of(request)
         ollama_up = await ctx.llm.health() if hasattr(ctx.llm, "health") else True
+        is_cloud = getattr(ctx.llm, "is_cloud", lambda _m: False)
         model, note, error = ctx.agent.model, ctx.agent.model_note, None
-        if ollama_up and model is None:
+        wanted = model or ctx.settings.model
+        # A cloud brain works without Ollama (only document search and memory need it).
+        if model is None and (ollama_up or is_cloud(wanted)):
             try:
                 model = await ctx.agent.ensure_model()
                 note = ctx.agent.model_note
             except OllamaError as e:
                 error = {"message": e.message, "hint": e.hint}
-        if not ollama_up:
+        if not ollama_up and not is_cloud(model):
             error = {"message": f"Can't reach Ollama at {ctx.settings.ollama_url}.",
                      "hint": "Open the Ollama app, or run `ollama serve`."}
         emb = ctx.memory.embedder
-        return {"ok": ollama_up and error is None, "version": __version__, "ollama": ollama_up,
+        provider = split_model(model)[0] if model else None
+        limit_fn = getattr(ctx.llm, "context_limit", None)
+        return {"ok": error is None, "version": __version__, "ollama": ollama_up,
                 "model": model, "model_note": note, "error": error,
+                "cloud": provider is not None,
+                "provider": PROVIDERS[provider].label if provider else None,
                 "embed_model": ctx.settings.embed_model, "embeddings_available": emb.available,
                 "embeddings_hint": emb.last_error.hint if emb.last_error else None,
-                "tools": len(REGISTRY.all()), "context_length": ctx.settings.context_length}
+                "tools": len(REGISTRY.all()),
+                "context_length": limit_fn(model) if limit_fn and model else ctx.settings.context_length}
 
     @app.get("/api/models")
     async def models(request: Request) -> dict[str, Any]:
+        """Local Ollama models, plus the models of every cloud provider that's set up."""
         ctx = ctx_of(request)
+        installed, local_error = [], None
         try:
             installed = await ctx.llm.list_models()
         except OllamaError as e:
-            raise HTTPException(503, detail={"message": e.message, "hint": e.hint}) from e
-        return {"models": installed, "current": ctx.agent.model or ctx.settings.model}
+            local_error = {"message": e.message, "hint": e.hint}
+        catalog = await ctx.llm.catalog() if hasattr(ctx.llm, "catalog") else []
+        if local_error and not any(p["configured"] for p in catalog):
+            raise HTTPException(503, detail=local_error)
+        return {"models": installed, "current": ctx.agent.model or ctx.settings.model,
+                "local_error": local_error, "cloud": catalog}
 
     @app.post("/api/models")
     async def choose_model(body: ModelChoice, request: Request) -> dict[str, Any]:
         ctx = ctx_of(request)
-        installed = await ctx.llm.list_models()
-        if body.model not in installed:
-            raise HTTPException(404, detail={"message": f"'{body.model}' isn't installed.",
-                                             "hint": f"Run: ollama pull {body.model}"})
+        pid, _bare = split_model(body.model)
+        if pid is not None:
+            if pid not in getattr(ctx.llm, "providers", {}):
+                info = PROVIDERS[pid]
+                raise HTTPException(409, detail={"message": f"{info.label} isn't set up yet.",
+                                                 "hint": f"Add a key in Settings → Cloud brains "
+                                                         f"(get one at {info.key_url})."})
+        else:
+            try:
+                installed = await ctx.llm.list_models()
+            except OllamaError as e:
+                raise HTTPException(503, detail={"message": e.message, "hint": e.hint}) from e
+            if body.model not in installed:
+                raise HTTPException(404, detail={"message": f"'{body.model}' isn't installed.",
+                                                 "hint": f"Run: ollama pull {body.model}"})
         ctx.agent.set_model(body.model)
-        return {"current": body.model}
+        return {"current": body.model, "cloud": pid is not None}
+
+    # ------------------------------------------------------ cloud brains
+    @app.get("/api/providers")
+    async def providers(request: Request) -> list[dict[str, Any]]:
+        ctx = ctx_of(request)
+        return await ctx.llm.catalog() if hasattr(ctx.llm, "catalog") else []
+
+    @app.put("/api/providers/{provider_id}/key")
+    async def set_provider_key(provider_id: str, body: KeyIn, request: Request) -> dict[str, Any]:
+        """Check a key with the provider, then save it to backend/.env (gitignored, owner-only)."""
+        ctx = ctx_of(request)
+        if provider_id not in PROVIDERS or not hasattr(ctx.llm, "set_key"):
+            raise HTTPException(404, detail={"message": "No such provider."})
+        try:
+            await ctx.llm.set_key(provider_id, body.key)
+        except OllamaError as e:
+            raise HTTPException(422, detail={"message": e.message, "hint": e.hint}) from e
+        env_file = getattr(request.app.state, "env_file", ENV_FILE)
+        save_env_value(env_file, PROVIDERS[provider_id].key_env, body.key)
+        return next(p for p in await ctx.llm.catalog() if p["id"] == provider_id)
+
+    @app.delete("/api/providers/{provider_id}/key")
+    async def remove_provider_key(provider_id: str, request: Request) -> dict[str, Any]:
+        ctx = ctx_of(request)
+        if provider_id not in PROVIDERS or not hasattr(ctx.llm, "set_key"):
+            raise HTTPException(404, detail={"message": "No such provider."})
+        await ctx.llm.set_key(provider_id, None)
+        save_env_value(getattr(request.app.state, "env_file", ENV_FILE),
+                       PROVIDERS[provider_id].key_env, None)
+        if ctx.agent.model and split_model(ctx.agent.model)[0] == provider_id:
+            ctx.agent.model, ctx.agent.model_note = None, None  # fall back to the local default
+        return {"removed": provider_id}
 
     # ------------------------------------------------------------- voice
     @app.get("/api/tts/status")

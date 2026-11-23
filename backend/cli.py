@@ -28,7 +28,7 @@ from rich.theme import Theme
 from aether import __version__
 from aether.config import get_settings
 from aether.engine import AetherAgent, Session
-from aether.llm.ollama import OllamaClient
+from aether.llm.router import router_from_settings
 from aether.mcp import MCPManager
 from aether.memory import MemorySystem
 from aether.memory.knowledge import KnowledgeError
@@ -138,8 +138,7 @@ class CLI:
     def __init__(self, model: str | None = None, *, llm: Any = None,
                  db_path: str | None = None) -> None:
         self.settings = get_settings()
-        self.llm = llm or OllamaClient(self.settings.ollama_url,
-                                       timeout_s=self.settings.request_timeout_s)
+        self.llm = llm or router_from_settings(self.settings)
         self.memory = MemorySystem(self.settings, self.llm, db_path=db_path)
         set_memory(self.memory)
 
@@ -301,9 +300,15 @@ class CLI:
                 except OllamaError as e:
                     console.print(Text(f"{e.message} → {e.hint}", style="danger"))
                     return True
+                catalog = getattr(self.agent.llm, "catalog", None)
+                for p in (await catalog() if catalog else []):
+                    if p["configured"]:
+                        models += [m["id"] for m in p["models"]]
                 for m in models:
                     mark = "◉" if m == self.agent.model else "○"
-                    console.print(Text(f" {mark} {m}", style="glacier" if mark == "◉" else "mist"))
+                    cloud = "  [cloud]" if ":" in m and m.split(":", 1)[0] in {
+                        "gemini", "groq", "openrouter", "claude"} else ""
+                    console.print(Text(f" {mark} {m}{cloud}", style="glacier" if mark == "◉" else "mist"))
         elif cmd == "mcp":
             if arg == "reload":
                 with console.status(Text(" restarting MCP servers…", style="glacier")):

@@ -3,7 +3,7 @@
 /** Model switcher, system health, motion, voice and reminder settings. */
 import clsx from "clsx";
 import { motion } from "framer-motion";
-import { AudioLines, CalendarDays, Cpu, Database, Plug, RefreshCw, Volume2 } from "lucide-react";
+import { AudioLines, CalendarDays, Cloud, Cpu, Database, ExternalLink, KeyRound, Plug, RefreshCw, Trash2, Volume2 } from "lucide-react";
 import { useState } from "react";
 
 import { api, ApiError } from "@/lib/api";
@@ -11,7 +11,7 @@ import { jelly } from "@/lib/motion";
 import { usePrefs } from "@/lib/prefs";
 import { useVoice } from "@/lib/useNeuralVoice";
 import { requestNotifications } from "@/lib/reminders";
-import type { Health } from "@/lib/types";
+import type { CloudProvider, Health } from "@/lib/types";
 import { useLive } from "@/lib/useLive";
 import { speechSupported } from "@/lib/voice";
 
@@ -78,6 +78,104 @@ function NeuralVoiceSection() {
           <Toggle checked={prefs.speakReplies} onChange={(v) => { if (v) voice.unlock(); else voice.stop(); setPref("speakReplies", v); }}
             label="Auto-speak replies" hint="Starts talking at the first finished sentence, while the rest is still being written." />
         </div>
+      </div>
+    </section>
+  );
+}
+
+function CloudProviderRow({ p, onChanged, toast }: {
+  p: CloudProvider;
+  onChanged: () => void;
+  toast: (t: string, b?: string) => void;
+}) {
+  const [key, setKey] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<ApiError | null>(null);
+
+  async function save() {
+    setBusy(true);
+    setErr(null);
+    try {
+      const saved = await api.setProviderKey(p.id, key.trim());
+      setKey("");
+      toast(`${p.label} connected`, `${saved.models.length} model${saved.models.length === 1 ? "" : "s"} added to the model menu.`);
+      onChanged();
+    } catch (e) {
+      setErr(e instanceof ApiError ? e : new ApiError(0, String(e)));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function remove() {
+    setBusy(true);
+    try {
+      await api.removeProviderKey(p.id);
+      toast(`${p.label} removed`, "Its key was deleted from backend/.env.");
+      onChanged();
+    } catch (e) {
+      toast(e instanceof ApiError ? e.message : "Couldn't remove the key");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="space-y-2 rounded-2xl border border-white/[0.06] bg-white/[0.02] p-2.5">
+      <div className="flex flex-wrap items-center gap-1.5">
+        <Cloud className="size-4 text-periwinkle" />
+        <span className="text-sm text-frost">{p.label}</span>
+        <Chip tone={p.free ? "seafoam" : "amber"}>{p.free ? "free tier" : "paid"}</Chip>
+        {p.configured && <Chip tone="glacier">connected · {p.models.length} models</Chip>}
+        <span className="flex-1" />
+        {p.configured && (
+          <JiggleButton tone="ghost" className="px-2 py-1" aria-label={`Remove ${p.label} key`} disabled={busy} onClick={() => void remove()}>
+            <Trash2 className="size-3.5" />
+          </JiggleButton>
+        )}
+      </div>
+      <p className="text-[11px] leading-snug text-mist">{p.note}</p>
+      {!p.configured && (
+        <form className="flex items-center gap-2" onSubmit={(e) => { e.preventDefault(); if (key.trim().length >= 8) void save(); }}>
+          <KeyRound className="size-4 shrink-0 text-mist" />
+          <input type="password" autoComplete="off" spellCheck={false} value={key} onChange={(e) => setKey(e.target.value)}
+            placeholder={`Paste your ${p.key_env}`} aria-label={`${p.label} API key`} className={inputClass} />
+          <JiggleButton type="submit" className="shrink-0 px-3 py-1.5 text-xs" disabled={busy || key.trim().length < 8}>
+            {busy ? "Checking…" : "Connect"}
+          </JiggleButton>
+        </form>
+      )}
+      {!p.configured && (
+        <a href={p.key_url} target="_blank" rel="noreferrer"
+          className="inline-flex items-center gap-1 text-[11px] text-glacier underline-offset-2 hover:underline">
+          Get a key <ExternalLink className="size-3" />
+        </a>
+      )}
+      {err && <ErrorNote message={err.message} hint={err.hint} />}
+      {p.error && <ErrorNote message={p.error.message} hint={p.error.hint} />}
+    </div>
+  );
+}
+
+function CloudSection({ revision, onChanged, toast }: {
+  revision: number;
+  onChanged: () => void;
+  toast: (t: string, b?: string) => void;
+}) {
+  const providers = useLive(api.providers, revision);
+  return (
+    <section>
+      <PanelTitle title="Cloud brains" hint="Optional. Local models stay the default; a cloud model is only used while you pick it." />
+      <div className="glass-inset space-y-2 rounded-2xl p-3">
+        <p className="text-[11px] leading-relaxed text-amber/90">
+          While a cloud model is selected, your messages (plus any memories and document passages AETHER adds) are
+          sent to that provider. Embeddings, documents and memory stay on this Mac. Keys are checked, then saved
+          only to <code className="font-mono">backend/.env</code>, which git ignores.
+        </p>
+        {providers.error && <ErrorNote message={providers.error.message} hint={providers.error.hint} />}
+        {providers.data?.map((p) => (
+          <CloudProviderRow key={p.id} p={p} toast={toast} onChanged={() => { void providers.reload(); onChanged(); }} />
+        ))}
       </div>
     </section>
   );
@@ -155,7 +253,7 @@ export function SettingsPanel({ health, onHealthChange, revision, toast }: {
   return (
     <div className="space-y-6">
       <section>
-        <PanelTitle title="Brain" hint="Any Ollama model that supports tool calling."
+        <PanelTitle title="Brain" hint="Any Ollama model that supports tool calling, or a cloud brain you've connected below."
           action={<JiggleButton tone="ghost" className="px-2 py-1" aria-label="Refresh" onClick={() => { void models.reload(); onHealthChange(); }}>
             <RefreshCw className="size-3.5" />
           </JiggleButton>} />
@@ -164,7 +262,14 @@ export function SettingsPanel({ health, onHealthChange, revision, toast }: {
             <Cpu className="size-4 text-glacier" />
             <select disabled={switching || !models.data} value={models.data?.current ?? ""}
               onChange={(e) => void choose(e.target.value)} className={inputClass} aria-label="Model">
-              {models.data?.models.map((m) => <option key={m} value={m}>{m}</option>)}
+              <optgroup label="On this Mac">
+                {models.data?.models.filter((m) => !/embed|bge-|minilm|rerank/i.test(m)).map((m) => <option key={m} value={m}>{m}</option>)}
+              </optgroup>
+              {models.data?.cloud?.filter((p) => p.configured).map((p) => (
+                <optgroup key={p.id} label={`${p.label} (cloud)`}>
+                  {p.models.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
+                </optgroup>
+              ))}
             </select>
           </div>
           {models.error && <ErrorNote message={models.error.message} hint={models.error.hint} />}
@@ -172,6 +277,7 @@ export function SettingsPanel({ health, onHealthChange, revision, toast }: {
           {health?.model_note && <p className="text-xs text-amber">{health.model_note}</p>}
           <div className="flex flex-wrap gap-1.5 text-[11px]">
             <Chip tone={health?.ollama ? "seafoam" : "coral"}>Ollama {health?.ollama ? "online" : "offline"}</Chip>
+            {health?.cloud && <Chip tone="amber"><Cloud className="size-3" />cloud · {health.provider}</Chip>}
             <Chip tone={health?.embeddings_available === false ? "amber" : "periwinkle"}>
               <Database className="size-3" />
               {health?.embed_model ?? "embeddings"} {health?.embeddings_available === false ? "missing" : ""}
@@ -182,6 +288,8 @@ export function SettingsPanel({ health, onHealthChange, revision, toast }: {
           {health?.embeddings_hint && <p className="font-mono text-[11px] text-frost/75">→ {health.embeddings_hint}</p>}
         </div>
       </section>
+
+      <CloudSection revision={revision} toast={toast} onChanged={() => { void models.reload(); onHealthChange(); }} />
 
       <McpSection revision={revision} toast={toast} />
 
