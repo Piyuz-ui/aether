@@ -33,7 +33,7 @@ type State = {
 };
 
 type Action =
-  | { type: "start"; user: string; id: string; images?: string[] }
+  | { type: "start"; user: string; id: string; userId?: string; images?: string[] }
   | { type: "session"; id: string }
   | { type: "event"; event: AgentEvent }
   | { type: "end"; stopped?: boolean; error?: { message: string; hint?: string } }
@@ -66,7 +66,7 @@ function reducer(state: State, action: Action): State {
         agentState: "thinking",
         messages: [
           ...state.messages,
-          { id: uid(), role: "user", content: action.user, images: action.images },
+          { id: action.userId ?? uid(), role: "user", content: action.user, images: action.images },
           { id: action.id, role: "assistant", steps: [], draft: "", thinking: "", content: "", status: "streaming" },
         ],
       };
@@ -222,12 +222,12 @@ export function useAgent(options?: { onAnswer?: (text: string) => void; onLearne
     if (last) void loadSession(last);
   }, [loadSession]);
 
-  const send = useCallback(async (text: string, images?: string[]) => {
+  const send = useCallback(async (text: string, images?: string[], opts?: { userId?: string }) => {
     const goal = text.trim() || (images?.length ? "What's in this image?" : "");
     if (!goal || controller.current) return;
     const ac = new AbortController();
     controller.current = ac;
-    dispatch({ type: "start", user: goal, id: uid(), images });
+    dispatch({ type: "start", user: goal, id: uid(), userId: opts?.userId, images });
     let error: { message: string; hint?: string } | undefined;
     try {
       const res = await fetch(`${API_BASE}/api/chat`, {

@@ -27,6 +27,7 @@ import { Composer, type ComposerHandle } from "./Composer";
 import { Drawer, type DrawerTab } from "./Drawer";
 import { MessageView, spokenText } from "./MessageView";
 import { ModelSwitcher } from "./ModelSwitcher";
+import { LandingContext, SendGhost, type Flight, type Rect } from "./SendFlight";
 import { ChatsPanel } from "./panels/ChatsPanel";
 import { MemoryPanel } from "./panels/MemoryPanel";
 import { SettingsPanel } from "./panels/SettingsPanel";
@@ -172,7 +173,9 @@ export function AetherApp() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [liveText, liveSegment, liveStatus, live?.id, prefs.speakReplies]);
 
-  function sendWithFiles(text: string) {
+  const [flight, setFlight] = useState<Flight | null>(null);
+
+  function sendWithFiles(text: string, from?: Rect) {
     voice.stop();           // a new question interrupts whatever is being read
     voice.unlock();         // this click lets the browser play audio for the reply
     feeder.current = null;
@@ -182,7 +185,11 @@ export function AetherApp() {
       ? `${text.trim() || "Summarise the attached files."}\n\n(Attached to my Knowledge Vault just now: ${ready.map((a) => a.filename).join(", ")}. Search them to answer.)`
       : text;
     files.clear();
-    void agent.send(goal, images);
+    const userId = `u-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+    const shown = goal.trim() || (images.length ? "What's in this image?" : "");
+    // The text lifts off the box and glides into the chat (skipped in calm mode).
+    if (from && shown && !prefs.calm) setFlight({ id: userId, text: shown, from });
+    void agent.send(goal, images, { userId });
   }
 
   useReminders(prefs.notifications, agent.revision, (t, b) => toast(t, b));
@@ -195,7 +202,7 @@ export function AetherApp() {
     const el = scroller.current;
     if (!el) return;
     const near = el.scrollHeight - el.scrollTop - el.clientHeight < 220;
-    if (near) el.scrollTo({ top: el.scrollHeight, behavior: prefs.calm ? "auto" : "smooth" });
+    if (near) el.scrollTo({ top: el.scrollHeight, behavior: prefs.calm || flight ? "auto" : "smooth" });
   }, [agent.messages.length, lastLen, prefs.calm]);
 
   // Layer 1: the glass plane drifts gently against the backdrop.
@@ -306,9 +313,11 @@ export function AetherApp() {
             {empty ? (
               <EmptyState state={state} level={voice.level} onPick={(t) => composer.current?.fill(t)} />
             ) : (
-              <div className="mx-auto flex max-w-3xl flex-col gap-6 px-4 py-8 sm:px-6">
-                {agent.messages.map((m) => <MessageView key={m.id} message={m} />)}
-              </div>
+              <LandingContext.Provider value={flight?.id ?? null}>
+                <div className="mx-auto flex max-w-3xl flex-col gap-6 px-4 py-8 sm:px-6">
+                  {agent.messages.map((m) => <MessageView key={m.id} message={m} />)}
+                </div>
+              </LandingContext.Provider>
             )}
           </div>
 
@@ -341,6 +350,10 @@ export function AetherApp() {
         </Drawer>
       </main>
 
+      {flight && (
+        <SendGhost key={flight.id} flight={flight} onLanded={() => setFlight(null)}
+          prepareLanding={() => { const el = scroller.current; if (el) el.scrollTop = el.scrollHeight; }} />
+      )}
       <ApprovalModal approval={agent.approval} onDecide={agent.decide} />
       <ArtifactPreview path={artifact} onClose={() => setArtifact(null)} onOpen={setArtifact} toast={toast} />
 

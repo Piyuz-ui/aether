@@ -15,6 +15,7 @@ import { jelly, popIn } from "@/lib/motion";
 import type { AssistantMessage, Message } from "@/lib/types";
 
 import { QuizDeck } from "./QuizDeck";
+import { useLandingId } from "./SendFlight";
 import { TelemetryChip } from "./Telemetry";
 import { ThoughtLine, ToolPill } from "./ToolPill";
 import { Spinner } from "./ui";
@@ -167,8 +168,9 @@ function AssistantBubble({ m }: { m: AssistantMessage }) {
 }
 
 export function MessageView({ message }: { message: Message }) {
+  const landing = useLandingId();
   return (
-    <motion.div variants={popIn} initial="hidden" animate="show" layout="position"
+    <motion.div variants={popIn} initial={landing === message.id ? "show" : "hidden"} animate="show" layout="position"
       className={clsx("flex w-full", message.role === "user" ? "justify-end" : "justify-start")}>
       {message.role === "user" ? (
         <div className="flex max-w-[85%] flex-col items-end gap-2">
@@ -185,7 +187,8 @@ export function MessageView({ message }: { message: Message }) {
               🖼 {message.imageCount} image{message.imageCount > 1 ? "s" : ""} attached
             </span>
           )}
-        <div className="max-w-full whitespace-pre-wrap rounded-3xl rounded-br-lg border border-sky/25 bg-gradient-to-br from-sky/25 to-periwinkle/15 px-4.5 py-3 text-[0.95rem] leading-relaxed text-frost shadow-[0_10px_30px_rgba(2,10,28,0.4)] backdrop-blur-xl">
+        <div data-bubble={message.id} style={landing === message.id ? { opacity: 0 } : undefined}
+          className="max-w-full whitespace-pre-wrap rounded-3xl rounded-br-lg border border-sky/25 bg-gradient-to-br from-sky/25 to-periwinkle/15 px-4.5 py-3 text-[0.95rem] leading-relaxed text-frost shadow-[0_10px_30px_rgba(2,10,28,0.4)] backdrop-blur-xl">
           {message.content}
         </div>
         </div>

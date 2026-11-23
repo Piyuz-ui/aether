@@ -2,19 +2,22 @@
 
 /** The message box: auto-growing input, push-to-talk mic, send / stop. */
 import clsx from "clsx";
-import { AnimatePresence, motion } from "framer-motion";
+import { AnimatePresence, motion, useAnimate } from "framer-motion";
 import { ArrowUp, FileText, Mic, Paperclip, Square, X } from "lucide-react";
 import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from "react";
 
 import { jelly } from "@/lib/motion";
+import { usePrefs } from "@/lib/prefs";
 import { ACCEPT_ATTR, type Attachment, type ImageAttachment } from "@/lib/useAttachments";
+
+import { ghostStart, type Rect } from "./SendFlight";
 import { useDictation } from "@/lib/voice";
 
 export type ComposerHandle = { fill: (text: string) => void; focus: () => void };
 
 export const Composer = forwardRef<ComposerHandle, {
   busy: boolean;
-  onSend: (text: string) => void;
+  onSend: (text: string, from?: Rect) => void;
   onStop: () => void;
   autoSendVoice: boolean;
   attachments: Attachment[];
@@ -26,6 +29,9 @@ export const Composer = forwardRef<ComposerHandle, {
 }>(function Composer({ busy, onSend, onStop, autoSendVoice, attachments, images, indexing, onAttach, onRemoveAttachment, onRemoveImage }, ref) {
   const [text, setText] = useState("");
   const area = useRef<HTMLTextAreaElement>(null);
+  const { prefs } = usePrefs();
+  const [scope, animate] = useAnimate<HTMLDivElement>();
+  const flash = useRef<HTMLSpanElement>(null);
   const picker = useRef<HTMLInputElement>(null);
 
   useImperativeHandle(ref, () => ({
@@ -55,18 +61,26 @@ export const Composer = forwardRef<ComposerHandle, {
 
   function submit() {
     if (busy || indexing || (!text.trim() && !attachments.length && !images.length)) return;
-    onSend(text);
+    const from = area.current && text.trim() ? ghostStart(area.current.getBoundingClientRect()) : undefined;
+    onSend(text, from);
     setText("");
+    if (!prefs.calm && scope.current) {
+      // the bar "gulps" the message: a soft squish and a glow that fades with it
+      void animate(scope.current, { scale: [1, 0.982, 1.004, 1] }, { duration: 0.5, ease: "easeOut" });
+      if (flash.current) void animate(flash.current, { opacity: [0, 1, 0] }, { duration: 0.65, ease: "easeOut" });
+    }
   }
 
   return (
-    <div className={clsx(
+    <motion.div ref={scope} className={clsx(
       "glass relative rounded-[26px] p-2 transition-[box-shadow,border-color] duration-300",
       // Keep the glass rim + drop shadow as a Tailwind shadow so the focus ring adds to it.
       "shadow-[inset_1px_1px_0_0_rgba(224,242,254,0.22),0_20px_50px_rgba(2,10,28,0.55)]",
       // The whole bar glows when you type, instead of a box around the text field.
       "focus-within:border-sky-200/40 focus-within:ring-2 focus-within:ring-sky-300/35",
     )}>
+      <span ref={flash} aria-hidden className="pointer-events-none absolute inset-0 rounded-[26px] opacity-0"
+        style={{ boxShadow: "inset 0 0 0 1.5px rgba(125,211,252,0.7), 0 0 36px rgba(56,189,248,0.35)" }} />
       <AnimatePresence>
         {voice.listening && (
           <motion.div aria-hidden className="pointer-events-none absolute inset-0 rounded-[26px]"
@@ -182,7 +196,8 @@ export const Composer = forwardRef<ComposerHandle, {
           ) : (
             <motion.button key="send" type="button" aria-label="Send" title="Send (Enter)" onClick={submit}
               disabled={indexing || (!text.trim() && !attachments.length && !images.length)}
-              initial={{ scale: 0.6, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.6, opacity: 0 }}
+              initial={{ scale: 0.6, opacity: 0 }} animate={{ scale: 1, opacity: 1 }}
+              exit={{ y: -26, scale: 0.85, opacity: 0, transition: { duration: 0.28, ease: [0.3, 0, 0.2, 1] } }}
               whileHover={{ scale: 1.08 }} whileTap={{ scale: 0.9 }} transition={jelly}
               className="grid size-10 shrink-0 place-items-center rounded-2xl bg-gradient-to-br from-sky to-periwinkle text-abyss-950 shadow-[0_6px_24px_rgba(56,189,248,0.4)] disabled:opacity-35 disabled:shadow-none">
               <ArrowUp className="size-[18px]" strokeWidth={2.5} />
@@ -191,6 +206,6 @@ export const Composer = forwardRef<ComposerHandle, {
         </AnimatePresence>
       </div>
       {voice.error && <div className="px-3 pb-1 pt-1.5 text-xs text-coral">{voice.error}</div>}
-    </div>
+    </motion.div>
   );
 });
