@@ -1,0 +1,19 @@
+# ---- Phase 1: core agent + CLI ----
+httpx==0.28.1
+rich==15.0.0
+ddgs==9.16.1
+pydantic==2.14.4
+pydantic-settings==2.16.3
+
+# ---- Phase 2: memory, RAG, API ----
+fastapi==0.165.0
+uvicorn[standard]==0.54.0
+sse-starlette==3.7.1
+python-multipart==0.0.34
+pypdf==7.1.1
+sqlite-vec==0.1.9
+numpy==2.5.5
+
+# ---- Development ----
+pytest==9.2.0
+pytest-asyncio==1.5.0

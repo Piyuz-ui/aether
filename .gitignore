@@ -14,3 +14,11 @@ workspace/*
 .agents/
 .claude/
 notes/*
+
+# AETHER
+backend/.venv/
+backend/.env
+backend/data/
+backend/workspace/
+frontend/node_modules/
+frontend/.next/

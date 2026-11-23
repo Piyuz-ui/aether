@@ -1,0 +1,350 @@
+"""AETHER in the terminal.
+
+    python cli.py                      interactive chat
+    python cli.py "what is 17% of 2400?"  answer one goal and exit
+    python cli.py --model qwen3:14b    choose a model
+"""
+from __future__ import annotations
+
+import argparse
+import asyncio
+import contextlib
+import json
+import sys
+from typing import Any
+
+from rich.console import Console, Group
+from rich.live import Live
+from rich.markdown import Markdown
+from rich.panel import Panel
+from rich.prompt import Confirm
+from rich.spinner import Spinner
+from rich.syntax import Syntax
+from rich.table import Table
+from rich.text import Text
+from rich.theme import Theme
+
+from aether import __version__
+from aether.config import get_settings
+from aether.engine import AetherAgent, Session
+from aether.events import AgentEvent, AgentState, EventType
+from aether.llm.ollama import OllamaError
+from aether.metrics import fmt_seconds
+from aether.tools import REGISTRY, Risk
+
+THEME = Theme({
+    "glacier": "#7DD3FC", "sky": "#38BDF8", "mist": "#94B8D7", "periwinkle": "#A5B4FC",
+    "seafoam": "#5EEAD4", "frost": "#F0F9FF", "warn": "#FCD34D", "danger": "#FDA4AF",
+    # Rich can't combine a theme name with bold/italic in one string ("bold warn"),
+    # so every combination gets its own theme entry.
+    "glacier.bold": "bold #7DD3FC", "sky.bold": "bold #38BDF8", "warn.bold": "bold #FCD34D",
+    "danger.bold": "bold #FDA4AF", "mist.italic": "italic #94B8D7",
+    "periwinkle.italic": "italic #A5B4FC", "warn.italic": "italic #FCD34D",
+})
+console = Console(theme=THEME, highlight=False)
+
+STATE_LABEL = {
+    AgentState.THINKING: "thinking", AgentState.USING_TOOL: "using a tool",
+    AgentState.AWAITING_APPROVAL: "waiting for your approval", AgentState.IDLE: "idle",
+}
+
+HELP = """\
+**Commands**
+
+| | |
+|---|---|
+| `/tools` | list tools and which ones need approval |
+| `/model [name]` | show installed models, or switch to one |
+| `/stats` | tokens, context and timing for this session |
+| `/verbose` | show full tool output on/off |
+| `/reset` | start a fresh conversation |
+| `/exit` | quit |
+
+Try: *"Search the web for the latest Python release and write me a note about what's new"* ·
+*"What's the standard deviation of 72, 85, 91, 64 and 88?"* ·
+*"Delete notes/test.md"* (shows the safety gate)
+"""
+
+
+def _short_args(args: dict[str, Any], limit: int = 110) -> str:
+    text = ", ".join(f"{k}={json.dumps(v, ensure_ascii=False)}" for k, v in args.items())
+    return text if len(text) <= limit else text[:limit] + "…"
+
+
+def _preview(output: str, lines: int = 3, width: int = 160) -> str:
+    rows = [r for r in output.strip().splitlines() if r.strip()][:lines]
+    rows = [r if len(r) <= width else r[:width] + "…" for r in rows]
+    more = len(output.strip().splitlines()) - len(rows)
+    return "\n".join(rows) + (f"\n… {more} more line(s)" if more > 0 else "")
+
+
+class StreamView:
+    """The live, transient area showing the agent's state and streaming text."""
+
+    def __init__(self) -> None:
+        self.live: Live | None = None
+        self.state = AgentState.THINKING
+        self.tool = ""
+        self.content = ""
+        self.thinking = ""
+
+    def _render(self) -> Group:
+        label = STATE_LABEL.get(self.state, "working")
+        if self.state is AgentState.USING_TOOL and self.tool:
+            label = f"running {self.tool}"
+        parts: list[Any] = [Spinner("dots12", text=Text(f" {label}…", style="glacier"),
+                                    style="sky")]
+        if self.thinking:
+            tail = self.thinking[-600:]
+            parts.append(Text(tail, style="mist.italic"))
+        if self.content:
+            parts.append(Markdown(self.content))
+        return Group(*parts)
+
+    def start(self) -> None:
+        if self.live is None:
+            self.live = Live(self._render(), console=console, refresh_per_second=15,
+                             transient=True)
+            self.live.start()
+
+    def update(self) -> None:
+        self.start()
+        assert self.live is not None
+        self.live.update(self._render())
+
+    def stop(self) -> None:
+        if self.live is not None:
+            self.live.stop()
+            self.live = None
+
+    def reset_text(self) -> None:
+        self.content = ""
+        self.thinking = ""
+
+
+class CLI:
+    def __init__(self, model: str | None = None) -> None:
+        self.settings = get_settings()
+        self.agent = AetherAgent(self.settings)
+        if model:
+            self.agent.set_model(model)
+        self.session = Session()
+        self.view = StreamView()
+        self.verbose = False
+        self.session_stats: list[dict[str, Any]] = []
+
+    # ------------------------------------------------------------- rendering
+    def handle(self, e: AgentEvent) -> None:
+        d = e.data
+        v = self.view
+        match e.type:
+            case EventType.STATUS:
+                v.state = AgentState(d["state"])
+                v.tool = d.get("tool", "")
+                if v.state is not AgentState.IDLE:
+                    v.update()
+            case EventType.TOKEN:
+                if d.get("channel") == "thinking":
+                    v.thinking += d["text"]
+                else:
+                    v.content += d["text"]
+                v.update()
+            case EventType.THOUGHT:
+                v.stop()
+                style = "warn" if d.get("kind") == "retry" else "periwinkle"
+                console.print(Text("  ◌ ", style=style) + Text(d["text"].strip(), style=f"{style}.italic"))
+                v.reset_text()
+            case EventType.TOOL_START:
+                v.stop()
+                risky = d.get("risk") == Risk.REQUIRES_APPROVAL.value
+                badge = Text(" needs approval ", style="black on #FCD34D") if risky else Text("")
+                console.print(Text("  ⚙ ", style="sky") + Text(d["name"], style="glacier.bold") +
+                              Text(f"  {_short_args(d.get('args', {}))} ", style="mist") + badge)
+            case EventType.APPROVAL_REQUIRED:
+                v.stop()
+                self._ask_approval(d)
+            case EventType.APPROVAL_RESOLVED:
+                if d["approved"]:
+                    console.print(Text("    ✓ approved", style="seafoam"))
+                else:
+                    console.print(Text(f"    ✗ denied {d.get('reason') or ''}".rstrip(), style="danger"))
+            case EventType.TOOL_RESULT:
+                v.stop()
+                icon, style = ("✓", "seafoam") if d["ok"] else ("✗", "danger")
+                body = d["output"] if self.verbose else _preview(d["output"])
+                head = Text(f"    {icon} {d['duration_s']:.2f}s ", style=style)
+                console.print(head + Text(body.replace("\n", "\n      "), style="mist"))
+            case EventType.DONE:
+                v.stop()
+                stats = d.get("stats", {})
+                self.session_stats.append(stats)
+                console.print()
+                console.print(Text(f"◉ {self.settings.agent_name}", style="glacier.bold"))
+                console.print(Markdown(d["answer"]))
+                if stats:
+                    console.print(Text(f"  ⏱ {stats.get('summary', '')}", style="mist"))
+                v.reset_text()
+            case EventType.ERROR:
+                v.stop()
+                msg = Text(d["message"], style="danger.bold")
+                if d.get("hint"):
+                    msg.append(f"\n→ {d['hint']}", style="frost")
+                console.print(Panel(msg, border_style="danger", title="Something went wrong"))
+                v.reset_text()
+
+    def _ask_approval(self, d: dict[str, Any]) -> None:
+        args_json = json.dumps(d.get("args", {}), indent=2, ensure_ascii=False)
+        body = Group(
+            Text(d.get("summary", ""), style="frost"),
+            Text(""),
+            Syntax(args_json[:3000], "json", theme="ansi_dark", word_wrap=True),
+        )
+        console.print(Panel(body, border_style="warn", padding=(1, 2),
+                            title=Text(f"⚠  {self.settings.agent_name} wants to run "
+                                       f"{d['name']}", style="warn.bold")))
+        try:
+            ok = Confirm.ask("[warn]Approve this action?[/]", default=False, console=console)
+        except (EOFError, KeyboardInterrupt):
+            ok = False
+        self.agent.broker.resolve(d["approval_id"], ok, "" if ok else "Denied in the terminal.")
+
+    # ------------------------------------------------------------------ run
+    async def run_goal(self, goal: str) -> None:
+        self.view.state = AgentState.THINKING
+        self.view.update()
+        try:
+            async with contextlib.aclosing(self.agent.run(goal, self.session)) as events:
+                async for event in events:
+                    self.handle(event)
+        finally:
+            self.view.stop()
+
+    async def banner(self) -> bool:
+        title = Text("◉ ", style="sky") + Text("A E T H E R", style="glacier.bold")
+        title.append(f"   v{__version__} · local autonomous agent", style="mist")
+        try:
+            model = await self.agent.ensure_model()
+        except OllamaError as e:
+            console.print(Panel(Group(title, Text(""), Text(e.message, style="danger"),
+                                      Text(f"→ {e.hint}", style="frost")),
+                                border_style="danger"))
+            return False
+        info = Text(f"brain ", style="mist") + Text(model, style="periwinkle")
+        info.append(f" · {len(REGISTRY.all())} tools · workspace ", style="mist")
+        info.append(str(self.settings.workspace_dir), style="periwinkle")
+        lines: list[Any] = [title, info]
+        if self.agent.model_note:
+            lines.append(Text(f"note: {self.agent.model_note}", style="warn"))
+        lines.append(Text("Type a goal, or /help.", style="mist"))
+        console.print(Panel(Group(*lines), border_style="sky", padding=(0, 2)))
+        return True
+
+    # -------------------------------------------------------------- commands
+    async def command(self, line: str) -> bool:
+        cmd, _, arg = line[1:].strip().partition(" ")
+        arg = arg.strip()
+        if cmd in {"exit", "quit", "q"}:
+            return False
+        if cmd == "help":
+            console.print(Markdown(HELP))
+        elif cmd == "tools":
+            table = Table(border_style="sky", header_style="glacier")
+            table.add_column("tool")
+            table.add_column("category", style="mist")
+            table.add_column("safety")
+            for t in sorted(REGISTRY.all(), key=lambda t: (t.category, t.name)):
+                safety = ("[warn]needs approval[/]" if t.risk is Risk.REQUIRES_APPROVAL else
+                          "[warn]sometimes[/]" if t.risk_check else "[seafoam]safe[/]")
+                table.add_row(t.name, t.category, safety)
+            console.print(table)
+        elif cmd == "model":
+            if arg:
+                self.agent.set_model(arg)
+                console.print(Text(f"Brain → {arg}", style="periwinkle"))
+            else:
+                try:
+                    models = await self.agent.llm.list_models()  # type: ignore[attr-defined]
+                except OllamaError as e:
+                    console.print(Text(f"{e.message} → {e.hint}", style="danger"))
+                    return True
+                for m in models:
+                    mark = "◉" if m == self.agent.model else "○"
+                    console.print(Text(f" {mark} {m}", style="glacier" if mark == "◉" else "mist"))
+        elif cmd == "stats":
+            self._print_stats()
+        elif cmd == "verbose":
+            self.verbose = not self.verbose
+            console.print(Text(f"Full tool output {'on' if self.verbose else 'off'}.", style="mist"))
+        elif cmd == "reset":
+            self.session = Session()
+            self.session_stats.clear()
+            console.print(Text("Fresh conversation started.", style="seafoam"))
+        else:
+            console.print(Text(f"Unknown command /{cmd}. Try /help.", style="warn"))
+        return True
+
+    def _print_stats(self) -> None:
+        if not self.session_stats:
+            console.print(Text("No replies yet.", style="mist"))
+            return
+        s = self.session_stats
+        table = Table(show_header=False, box=None, padding=(0, 2))
+        table.add_row("[mist]replies[/]", str(len(s)))
+        table.add_row("[mist]tokens[/]", f"{sum(x['prompt_tokens'] for x in s):,} in · "
+                                         f"{sum(x['output_tokens'] for x in s):,} out")
+        total = sum(x["wall_s"] for x in s)
+        table.add_row("[mist]time[/]", f"{fmt_seconds(total)} total · "
+                                       f"{fmt_seconds(total / len(s))} average")
+        table.add_row("[mist]peak context[/]", f"{max(x['context_pct'] for x in s):.0f}% of "
+                                               f"{self.settings.context_length:,}")
+        table.add_row("[mist]tool calls[/]", str(sum(len(x["tools"]) for x in s)))
+        console.print(Panel(table, title="session", border_style="sky", expand=False))
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="AETHER, a local autonomous agent")
+    parser.add_argument("goal", nargs="*", help="answer this one goal and exit")
+    parser.add_argument("--model", help="Ollama model to use (default from settings)")
+    args = parser.parse_args()
+
+    cli = CLI(model=args.model)
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+
+    def run(coro: Any) -> None:
+        task = loop.create_task(coro)
+        try:
+            loop.run_until_complete(task)
+        except KeyboardInterrupt:
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError, KeyboardInterrupt):
+                loop.run_until_complete(task)
+            cli.view.stop()
+            console.print(Text("  ⏹ stopped", style="warn"))
+
+    try:
+        loop.run_until_complete(cli.banner())
+        if args.goal:
+            run(cli.run_goal(" ".join(args.goal)))
+            return
+        while True:
+            try:
+                line = console.input("\n[sky.bold]›[/] ").strip()
+            except (EOFError, KeyboardInterrupt):
+                break
+            if not line:
+                continue
+            if line.startswith("/"):
+                if not loop.run_until_complete(cli.command(line)):
+                    break
+                continue
+            run(cli.run_goal(line))
+        console.print(Text("\nSee you soon. ◉", style="glacier"))
+    finally:
+        with contextlib.suppress(Exception):
+            loop.run_until_complete(cli.agent.llm.aclose())  # type: ignore[attr-defined]
+        loop.close()
+
+
+if __name__ == "__main__":
+    sys.exit(main())
