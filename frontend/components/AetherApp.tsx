@@ -1,6 +1,6 @@
 "use client";
 
-import { AnimatePresence, motion, useTransform } from "framer-motion";
+import { AnimatePresence, motion, useTransform, type MotionValue } from "framer-motion";
 import clsx from "clsx";
 import {
   AlertTriangle, BookOpen, Brain, CalendarRange, Calculator, Globe, Library, PanelRight, Plus, RefreshCw,
@@ -9,6 +9,7 @@ import {
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { api } from "@/lib/api";
+import { ArtifactContext } from "@/lib/artifacts";
 import { jelly, popIn } from "@/lib/motion";
 import { usePrefs } from "@/lib/prefs";
 import { useReminders } from "@/lib/reminders";
@@ -16,13 +17,15 @@ import type { AgentState, Health } from "@/lib/types";
 import { useAgent } from "@/lib/useAgent";
 import { useAttachments } from "@/lib/useAttachments";
 import { useLive } from "@/lib/useLive";
-import { speak, useWakeWord } from "@/lib/voice";
+import { useVoice, type Feeder } from "@/lib/useNeuralVoice";
+import { useWakeWord } from "@/lib/voice";
 
 import { AgentOrb, STATE_LABEL } from "./AgentOrb";
 import { ApprovalModal } from "./ApprovalModal";
+import { ArtifactPreview } from "./ArtifactPreview";
 import { Composer, type ComposerHandle } from "./Composer";
 import { Drawer, type DrawerTab } from "./Drawer";
-import { MessageView } from "./MessageView";
+import { MessageView, spokenText } from "./MessageView";
 import { ModelSwitcher } from "./ModelSwitcher";
 import { ChatsPanel } from "./panels/ChatsPanel";
 import { MemoryPanel } from "./panels/MemoryPanel";
@@ -80,10 +83,10 @@ function AgentStats({ tools, revision }: { tools: number; revision: number }) {
   );
 }
 
-function EmptyState({ state, onPick }: { state: AgentState; onPick: (t: string) => void }) {
+function EmptyState({ state, onPick, level }: { state: AgentState; onPick: (t: string) => void; level: MotionValue<number> }) {
   return (
     <motion.div variants={popIn} initial="hidden" animate="show" className="mx-auto flex max-w-2xl flex-col items-center px-4 pt-[8vh] text-center">
-      <AgentOrb state={state} size={132} />
+      <AgentOrb state={state} size={132} level={level} />
       <h1 className="mt-10 text-3xl font-semibold tracking-tight text-frost sm:text-4xl">{greeting()}</h1>
       <p className="mt-3 max-w-md text-balance text-[15px] leading-relaxed text-mist">
         I&apos;m AETHER, your local study, research and productivity agent. I can search the web, read your
@@ -125,8 +128,8 @@ export function AetherApp() {
     setTimeout(() => setToasts((t) => t.filter((x) => x.id !== id)), 4800);
   }, []);
 
+  const voice = useVoice();
   const agent = useAgent({
-    onAnswer: (text) => prefs.speakReplies && speak(text),
     onLearned: (facts) => facts.length && toast("🧠 Remembered", facts.map((f) => f.text).join(" · ")),
   });
 
@@ -143,16 +146,43 @@ export function AetherApp() {
   useEffect(() => { void loadHealth(); }, [loadHealth]);
 
   const files = useAttachments(toast);
+  const [artifact, setArtifact] = useState<string | null>(null);
   const [dragging, setDragging] = useState(false);
   const dragDepth = useRef(0);
 
+  // Auto-speak: read the reply aloud while it's still being written, sentence by sentence.
+  const feeder = useRef<{ id: string; feed: Feeder } | null>(null);
+  const lastMsg = agent.messages[agent.messages.length - 1];
+  const live = lastMsg?.role === "assistant" ? lastMsg : undefined;
+  const liveStatus = live?.status;
+  const liveText = live ? (live.status === "streaming" ? live.draft : spokenText(live)) : "";
+  const liveSegment = live?.steps.length ?? 0;
+  useEffect(() => {
+    if (!prefs.speakReplies || !live) return;
+    if (liveStatus === "error" || liveStatus === "stopped") {
+      if (feeder.current?.id === live.id) feeder.current = null;
+      return;
+    }
+    if (!feeder.current || feeder.current.id !== live.id) {
+      if (liveStatus !== "streaming") return; // only replies being written now, not reopened chats
+      feeder.current = { id: live.id, feed: voice.stream(live.id) };
+    }
+    if (liveStatus === "streaming") feeder.current.feed.push(liveText, liveSegment);
+    else if (liveStatus === "done") feeder.current.feed.end(liveText);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [liveText, liveSegment, liveStatus, live?.id, prefs.speakReplies]);
+
   function sendWithFiles(text: string) {
+    voice.stop();           // a new question interrupts whatever is being read
+    voice.unlock();         // this click lets the browser play audio for the reply
+    feeder.current = null;
     const ready = files.items.filter((a) => a.status === "ready");
+    const images = files.images.map((i) => i.dataUrl);
     const goal = ready.length
       ? `${text.trim() || "Summarise the attached files."}\n\n(Attached to my Knowledge Vault just now: ${ready.map((a) => a.filename).join(", ")}. Search them to answer.)`
       : text;
     files.clear();
-    void agent.send(goal);
+    void agent.send(goal, images);
   }
 
   useReminders(prefs.notifications, agent.revision, (t, b) => toast(t, b));
@@ -176,7 +206,7 @@ export function AetherApp() {
   const empty = agent.messages.length === 0;
 
   return (
-    <>
+    <ArtifactContext.Provider value={setArtifact}>
       <main className="relative z-10 flex h-dvh">
         <motion.section
           style={{ x: planeX, y: planeY }}
@@ -210,7 +240,7 @@ export function AetherApp() {
                     <UploadCloud className="size-10 text-glacier" />
                   </motion.div>
                   <div className="mt-3 text-lg font-semibold text-frost">Drop to add to AETHER</div>
-                  <div className="mt-1 text-sm text-mist">PDF · PowerPoint (.pptx) · Markdown · TXT</div>
+                  <div className="mt-1 text-sm text-mist">Images · PDF · PowerPoint (.pptx) · Markdown · TXT</div>
                 </motion.div>
               </motion.div>
             )}
@@ -218,7 +248,7 @@ export function AetherApp() {
           {/* header */}
           <header className="relative z-30 px-3 pt-3 sm:px-5">
             <div className="glass mx-auto flex max-w-4xl items-center gap-3 rounded-[22px] py-2 pl-3 pr-2">
-              <AgentOrb state={state} size={34} />
+              <AgentOrb state={state} size={34} level={voice.level} />
               <div className="min-w-0 flex-1">
                 <div className="text-[15px] font-semibold tracking-[0.22em] text-frost">AETHER</div>
                 <div className="flex min-w-0 items-center gap-1.5 text-xs">
@@ -274,7 +304,7 @@ export function AetherApp() {
           {/* conversation */}
           <div ref={scroller} className="soft-scroll min-h-0 flex-1 overflow-y-auto">
             {empty ? (
-              <EmptyState state={state} onPick={(t) => composer.current?.fill(t)} />
+              <EmptyState state={state} level={voice.level} onPick={(t) => composer.current?.fill(t)} />
             ) : (
               <div className="mx-auto flex max-w-3xl flex-col gap-6 px-4 py-8 sm:px-6">
                 {agent.messages.map((m) => <MessageView key={m.id} message={m} />)}
@@ -285,9 +315,10 @@ export function AetherApp() {
           {/* composer */}
           <div className="px-3 pb-3 sm:px-5 sm:pb-5">
             <div className="mx-auto max-w-3xl">
-              <Composer ref={composer} busy={agent.busy} onSend={sendWithFiles} onStop={agent.stop}
-                autoSendVoice={prefs.autoSendVoice} attachments={files.items} indexing={files.indexing || files.uploading}
-                onAttach={(f) => void files.add(f)} onRemoveAttachment={files.remove} />
+              <Composer ref={composer} busy={agent.busy} onSend={sendWithFiles} onStop={() => { agent.stop(); voice.stop(); }}
+                autoSendVoice={prefs.autoSendVoice} attachments={files.items} images={files.images}
+                indexing={files.indexing || files.uploading}
+                onAttach={(f) => void files.add(f)} onRemoveAttachment={files.remove} onRemoveImage={files.removeImage} />
               <p className="mt-2 text-center text-[11px] text-mist/75">
                 Runs locally on Ollama · risky actions always ask first
               </p>
@@ -311,6 +342,7 @@ export function AetherApp() {
       </main>
 
       <ApprovalModal approval={agent.approval} onDecide={agent.decide} />
+      <ArtifactPreview path={artifact} onClose={() => setArtifact(null)} onOpen={setArtifact} toast={toast} />
 
       {/* toasts */}
       <div className="pointer-events-none fixed right-4 top-4 z-[60] flex w-[min(340px,calc(100vw-32px))] flex-col gap-2" aria-live="polite">
@@ -325,6 +357,6 @@ export function AetherApp() {
           ))}
         </AnimatePresence>
       </div>
-    </>
+    </ArtifactContext.Provider>
   );
 }

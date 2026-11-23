@@ -6,7 +6,7 @@ import { Check, Pencil, Plus, X } from "lucide-react";
 import { useState } from "react";
 
 import { api } from "@/lib/api";
-import { popIn } from "@/lib/motion";
+import { jelly, popIn } from "@/lib/motion";
 import type { Fact } from "@/lib/types";
 import { useLive } from "@/lib/useLive";
 
@@ -55,6 +55,35 @@ function FactRow({ fact, onChange }: { fact: Fact; onChange: () => void }) {
   );
 }
 
+function TopicStats({ revision }: { revision: number }) {
+  const stats = useLive(api.quizStats, revision, 20_000);
+  if (!stats.data?.length) return null;
+  return (
+    <div className="glass-inset mb-3 rounded-2xl p-3">
+      <div className="mb-2 text-[11px] uppercase tracking-[0.14em] text-mist">Quiz topics</div>
+      <div className="space-y-2">
+        {stats.data.slice(0, 8).map((t) => {
+          const pct = Math.round(t.accuracy * 100);
+          return (
+            <div key={t.topic}>
+              <div className="flex items-center justify-between text-xs">
+                <span className="truncate text-frost">{t.topic}</span>
+                <span className={t.weak ? "text-amber" : "text-mist"}>
+                  {t.weak && "weak · "}{pct}% · {t.correct + t.wrong} answered
+                </span>
+              </div>
+              <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-white/[0.06]">
+                <motion.div className={t.weak ? "h-full rounded-full bg-amber" : "h-full rounded-full bg-gradient-to-r from-sky to-seafoam"}
+                  initial={{ width: 0 }} animate={{ width: `${Math.max(4, pct)}%` }} transition={jelly} />
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 export function MemoryPanel({ revision }: { revision: number }) {
   const facts = useLive(api.facts, revision);
   const [text, setText] = useState("");
@@ -84,6 +113,7 @@ export function MemoryPanel({ revision }: { revision: number }) {
           </JiggleButton>
         </div>
       </div>
+      <TopicStats revision={revision} />
       {facts.error && <ErrorNote message={facts.error.message} hint={facts.error.hint} />}
       {facts.data?.length === 0 && <Empty>Nothing remembered yet. Tell AETHER about yourself!</Empty>}
       <div className="space-y-2">

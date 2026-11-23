@@ -1,4 +1,9 @@
 /** Typed client for the AETHER backend. */
+export type McpServer = {
+  name: string; state: "starting" | "connected" | "error" | "disabled"; tools: number;
+  error: string | null; approval: string; command: string; server?: string;
+};
+
 import type {
   ClassSlot,
   Fact,
@@ -94,6 +99,9 @@ export const api = {
   reindex: (id: number) => request(`/api/knowledge/${id}/reindex`, { method: "POST" }),
   deleteDocument: (id: number) => request(`/api/knowledge/${id}`, { method: "DELETE" }),
 
+  quizStats: () => request<{ topic: string; correct: number; wrong: number; accuracy: number; weak: boolean }[]>("/api/quiz-stats"),
+  mcp: () => request<{ config: string; exists: boolean; servers: McpServer[] }>("/api/mcp"),
+  reloadMcp: () => request<{ servers: McpServer[] }>("/api/mcp/reload", { method: "POST" }),
   calendarUrl: () => `${API_BASE}/api/calendar.ics`,
   fileUrl: (path: string, download = false) =>
     `${API_BASE}/api/files/${path.split("/").map(encodeURIComponent).join("/")}${download ? "?download=true" : ""}`,

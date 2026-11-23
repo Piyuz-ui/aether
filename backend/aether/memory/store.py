@@ -76,6 +76,19 @@ CREATE TABLE IF NOT EXISTS timetable (
     created REAL NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS quizzes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    title TEXT NOT NULL,
+    data TEXT NOT NULL,
+    created REAL NOT NULL
+);
+CREATE TABLE IF NOT EXISTS quiz_stats (
+    topic TEXT PRIMARY KEY,
+    correct INTEGER NOT NULL DEFAULT 0,
+    wrong INTEGER NOT NULL DEFAULT 0,
+    updated REAL NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS documents (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     filename TEXT NOT NULL,
@@ -130,9 +143,16 @@ class Store:
         self.conn.execute("PRAGMA journal_mode = WAL")
         self.has_vec = self._load_sqlite_vec()
         self.conn.executescript(SCHEMA)
+        self._migrate()
         self.conn.execute("INSERT OR IGNORE INTO meta VALUES ('schema_version', ?)",
                           (str(SCHEMA_VERSION),))
         self.conn.commit()
+
+    def _migrate(self) -> None:
+        """Small additive migrations for databases created by older versions."""
+        cols = {r[1] for r in self.conn.execute("PRAGMA table_info(messages)").fetchall()}
+        if "meta" not in cols:
+            self.conn.execute("ALTER TABLE messages ADD COLUMN meta TEXT")
 
     def _load_sqlite_vec(self) -> bool:
         try:
@@ -229,11 +249,12 @@ class Store:
         now = time.time()
         rows = [(session_id, turn, m["role"], str(m.get("content") or ""),
                  json.dumps(m["tool_calls"]) if m.get("tool_calls") else None,
-                 m.get("tool_name"), now) for m in messages]
+                 m.get("tool_name"), json.dumps(m["meta"]) if m.get("meta") else None, now)
+                for m in messages]
         with self._lock:
             self.conn.executemany(
                 "INSERT INTO messages (session_id, turn, role, content, tool_calls, tool_name, "
-                "created) VALUES (?, ?, ?, ?, ?, ?, ?)", rows)
+                "meta, created) VALUES (?, ?, ?, ?, ?, ?, ?, ?)", rows)
             self.conn.execute("UPDATE sessions SET updated = ? WHERE id = ?", (now, session_id))
             self.conn.commit()
 
@@ -247,5 +268,7 @@ class Store:
                 msg["tool_calls"] = json.loads(r["tool_calls"])
             if r["tool_name"]:
                 msg["tool_name"] = r["tool_name"]
+            if r.get("meta"):
+                msg["meta"] = json.loads(r["meta"])
             turns.setdefault(r["turn"], []).append(msg)
         return [turns[k] for k in sorted(turns)]

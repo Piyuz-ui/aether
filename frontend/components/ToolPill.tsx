@@ -5,11 +5,12 @@ import clsx from "clsx";
 import { AnimatePresence, motion } from "framer-motion";
 import {
   Ban, Brain, Calculator, CalendarClock, CalendarDays, CalendarPlus, Check, ChevronDown, CircleHelp,
-  FileDown, FileText, FolderOpen, Globe, Library, ListChecks, NotebookPen, ShieldAlert, Sparkles, SquareTerminal,
+  FileDown, FileText, FolderOpen, GraduationCap, Plug, Globe, Library, ListChecks, NotebookPen, ShieldAlert, Sparkles, SquareTerminal,
   Terminal, Trash2, Wrench, X, type LucideIcon,
 } from "lucide-react";
 import { useState } from "react";
 
+import { filesIn, useOpenArtifact } from "@/lib/artifacts";
 import { jelly, popIn } from "@/lib/motion";
 import type { ThoughtStep, ToolStep } from "@/lib/types";
 
@@ -19,7 +20,7 @@ const ICONS: Record<string, LucideIcon> = {
   globe: Globe, "file-text": FileText, calculator: Calculator, "notebook-pen": NotebookPen,
   "folder-open": FolderOpen, "square-terminal": SquareTerminal, terminal: Terminal, "trash-2": Trash2,
   library: Library, "list-checks": ListChecks, "calendar-plus": CalendarPlus, "calendar-clock": CalendarClock,
-  "calendar-days": CalendarDays, brain: Brain, wrench: Wrench, "circle-help": CircleHelp, "file-down": FileDown,
+  "calendar-days": CalendarDays, brain: Brain, wrench: Wrench, "circle-help": CircleHelp, "file-down": FileDown, "graduation-cap": GraduationCap, plug: Plug,
 };
 
 // Older transcripts don't carry icons, so fall back on the tool name.
@@ -29,10 +30,10 @@ const BY_NAME: Record<string, string> = {
   run_shell_command: "terminal", delete_file: "trash-2", search_knowledge_base: "library",
   list_documents: "library", add_task: "calendar-plus", manage_tasks: "list-checks", add_class: "calendar-clock",
   manage_timetable: "calendar-days", remember: "brain", recall_memory: "brain", forget: "brain",
-  create_pdf: "file-down",
+  create_pdf: "file-down", make_quiz: "graduation-cap",
 };
 
-const pretty = (name: string) => name.replace(/_/g, " ");
+const pretty = (name: string) => name.includes("__") ? name.replace("__", " › ").replace(/_/g, " ") : name.replace(/_/g, " ");
 
 // The argument that best describes a call, in order of preference.
 const KEY_ARGS = ["title", "query", "expression", "path", "command", "url", "course", "fact", "action", "code"];
@@ -46,6 +47,9 @@ function summarize(args: Record<string, unknown>): string {
 
 export function ToolPill({ step }: { step: ToolStep }) {
   const [open, setOpen] = useState(false);
+  const openArtifact = useOpenArtifact();
+  const artifact = step.status === "ok" && ["write_note", "create_pdf"].includes(step.name)
+    ? filesIn(step.output)[0] : undefined;
   const Icon = ICONS[step.icon] ?? ICONS[BY_NAME[step.name] ?? "wrench"] ?? Wrench;
   const status = {
     running: { tone: "border-glacier/30 bg-glacier/[0.08]", badge: <Spinner /> },
@@ -83,6 +87,14 @@ export function ToolPill({ step }: { step: ToolStep }) {
           <span className="font-mono text-[11px] text-mist/80">{step.duration.toFixed(2)}s</span>
         )}
         {status.badge}
+        {artifact && (
+          <span role="button" tabIndex={0} title="Preview"
+            onClick={(e) => { e.stopPropagation(); openArtifact(artifact); }}
+            onKeyDown={(e) => { if (e.key === "Enter") { e.stopPropagation(); openArtifact(artifact); } }}
+            className="rounded-lg bg-glacier/15 px-2 py-0.5 font-sans text-[11px] font-medium text-glacier hover:bg-glacier/25">
+            Open
+          </span>
+        )}
         <motion.span animate={{ rotate: open ? 180 : 0 }} transition={jelly}>
           <ChevronDown className="size-3.5 text-mist" />
         </motion.span>

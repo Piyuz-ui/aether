@@ -21,6 +21,7 @@ class Settings(BaseSettings):
         "qwen3:14b", "qwen3:8b", "llama3.1:8b", "qwen2.5:14b", "qwen2.5-coder:14b",
         "mistral-nemo", "llama3.2"])
     embed_model: str = "nomic-embed-text"
+    vision_model: str = ""           # preferred model for images; "" = any installed vision model
     context_length: int = 16384
     temperature: float = 0.2
     # Hard cap per model call. Small models occasionally loop forever, so this turns a
@@ -51,6 +52,7 @@ class Settings(BaseSettings):
 
     # --- places --------------------------------------------------------------
     workspace_dir: Path = BACKEND_DIR / "workspace"
+    mcp_config: Path = BACKEND_DIR / "mcp_servers.json"   # external MCP tool servers (optional)
     data_dir: Path = BACKEND_DIR / "data"
 
     # --- persona -------------------------------------------------------------

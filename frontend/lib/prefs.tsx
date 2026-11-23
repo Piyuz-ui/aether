@@ -16,6 +16,8 @@ export type Prefs = {
   autoSendVoice: boolean; // send as soon as you stop talking
   notifications: boolean; // desktop reminders for deadlines
   drawerOpen: boolean;
+  voice: string; // Kokoro voice preset id
+  speed: number; // 0.85 – 1.25
 };
 
 const DEFAULTS: Prefs = {
@@ -25,6 +27,8 @@ const DEFAULTS: Prefs = {
   autoSendVoice: true,
   notifications: false,
   drawerOpen: true,
+  voice: "af_heart",
+  speed: 1,
 };
 
 const KEY = "aether.prefs.v1";

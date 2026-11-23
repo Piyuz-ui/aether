@@ -279,7 +279,30 @@ class KnowledgeBase:
         return await self.index(doc["id"], on_progress)
 
     # ---------------------------------------------------------------- search
+    GENERIC = {"quiz", "test", "notes", "note", "summary", "summarise", "summarize", "document",
+               "documents", "pdf", "slides", "everything", "all", "me", "my", "on", "the", "from",
+               "about", "uploaded", "file", "files", "questions", "study", "of", "a"}
+
+    def overview(self, k: int, document: str = "") -> list[Hit]:
+        """A spread of passages across the document(s): first passage of evenly spaced pages."""
+        where, params = "", ()
+        if document and (doc := self.find_document(document)):
+            where, params = "WHERE c.doc_id = ?", (doc["id"],)
+        rows = self.store.query(
+            f"SELECT c.id, c.doc_id, c.page, c.text, d.filename FROM chunks c JOIN documents d "
+            f"ON d.id = c.doc_id {where} ORDER BY d.created DESC, c.page, c.idx", params)
+        if not rows:
+            return []
+        step = max(1, len(rows) // k)
+        picked = rows[::step][:k]
+        return [Hit(chunk_id=r["id"], doc_id=r["doc_id"], filename=r["filename"], page=r["page"],
+                    text=r["text"], score=0.0) for r in picked]
+
     async def search(self, query: str, k: int = 5, document: str = "") -> list[Hit]:
+        words = set(re.findall(r"[a-z0-9]+", query.lower()))
+        if words and words <= self.GENERIC:
+            # "quiz me on my notes" has no subject to search for: cover the material instead.
+            return self.overview(k, document)
         where, params = "", ()
         if document:
             doc = self.find_document(document)

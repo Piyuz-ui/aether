@@ -7,7 +7,7 @@
  *   using_tool         luminous cyan pulse ring expanding outward
  *   awaiting_approval  soft bioluminescent wave that draws calm attention
  */
-import { AnimatePresence, motion } from "framer-motion";
+import { AnimatePresence, motion, useMotionValue, useTransform, type MotionValue } from "framer-motion";
 
 import { jelly } from "@/lib/motion";
 import { usePrefs } from "@/lib/prefs";
@@ -62,13 +62,27 @@ function Rings({ state, size }: { state: AgentState; size: number }) {
   );
 }
 
-export function AgentOrb({ state, size = 44 }: { state: AgentState; size?: number }) {
+export function AgentOrb({ state, size = 44, level }: {
+  state: AgentState;
+  size?: number;
+  /** 0–1 loudness of AETHER's voice while it speaks (drives the swell and seafoam halo) */
+  level?: MotionValue<number>;
+}) {
   const { prefs } = usePrefs();
   const mood = MOOD[state];
   const calm = prefs.calm;
+  const silent = useMotionValue(0);
+  const voice = level ?? silent;
+  const swell = useTransform(voice, (v) => 1 + v * 0.2);
+  const haloOpacity = useTransform(voice, [0, 0.05, 1], [0, 0.35, 1]);
+  const haloScale = useTransform(voice, (v) => 1.05 + v * 0.55);
   return (
-    <div className="relative grid place-items-center" style={{ width: size, height: size }} role="img"
-      aria-label={`AETHER is ${state.replace("_", " ")}`}>
+    <motion.div className="relative grid place-items-center" style={{ width: size, height: size, scale: calm ? 1 : swell }}
+      role="img" aria-label={`AETHER is ${state.replace("_", " ")}`}>
+      {/* voice halo: breathes with the actual cadence of the speech */}
+      <motion.div aria-hidden className="pointer-events-none absolute rounded-full blur-xl"
+        style={{ inset: -size * 0.3, opacity: haloOpacity, scale: haloScale,
+          background: "radial-gradient(circle, rgba(94,234,212,0.75), rgba(125,211,252,0.25) 55%, transparent 72%)" }} />
       {/* soft aura */}
       <motion.div
         className="absolute rounded-full blur-2xl"
@@ -104,7 +118,7 @@ export function AgentOrb({ state, size = 44 }: { state: AgentState; size?: numbe
           transition={{ duration: mood.morph, repeat: Infinity, ease: "easeInOut" }}
         />
       </motion.div>
-    </div>
+    </motion.div>
   );
 }
 

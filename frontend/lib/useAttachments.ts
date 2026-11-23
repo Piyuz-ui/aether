@@ -10,15 +10,49 @@ import { api, ApiError } from "./api";
 import type { KnowledgeDoc } from "./types";
 
 export const ACCEPTED = /\.(pdf|pptx|md|markdown|txt)$/i;
-export const ACCEPT_ATTR = ".pdf,.pptx,.md,.markdown,.txt";
+export const IMAGE = /\.(png|jpe?g|webp|gif|heic|heif)$/i;
+export const ACCEPT_ATTR = ".pdf,.pptx,.md,.markdown,.txt,image/*";
+const MAX_SIDE = 1600;
+
+export type ImageAttachment = { id: string; name: string; dataUrl: string };
+
+/** Downscale big photos/screenshots in the browser: faster upload, fewer vision tokens. */
+async function loadImage(file: File): Promise<string> {
+  const bitmap = await createImageBitmap(file).catch(() => {
+    throw new Error(`${file.name}: this browser can't read that image format. Try PNG or JPEG.`);
+  });
+  const scale = Math.min(1, MAX_SIDE / Math.max(bitmap.width, bitmap.height));
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.round(bitmap.width * scale);
+  canvas.height = Math.round(bitmap.height * scale);
+  canvas.getContext("2d")!.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+  bitmap.close();
+  return canvas.toDataURL("image/jpeg", 0.88);
+}
 
 export type Attachment = Pick<KnowledgeDoc, "id" | "filename" | "status" | "progress" | "error">;
 
 export function useAttachments(onError: (title: string, body?: string) => void) {
   const [items, setItems] = useState<Attachment[]>([]);
+  const [images, setImages] = useState<ImageAttachment[]>([]);
   const [uploading, setUploading] = useState(false);
 
   const add = useCallback(async (files: File[]) => {
+    const pics = files.filter((f) => IMAGE.test(f.name) || f.type.startsWith("image/"));
+    if (pics.length) {
+      const room = Math.max(0, 4 - images.length);
+      if (pics.length > room) onError("Up to 4 images per message", `Skipped ${pics.length - room}.`);
+      for (const f of pics.slice(0, room)) {
+        try {
+          const dataUrl = await loadImage(f);
+          setImages((prev) => [...prev, { id: `${f.name}-${Date.now()}-${Math.random()}`, name: f.name, dataUrl }]);
+        } catch (e) {
+          onError(e instanceof Error ? e.message : "Couldn't read that image.");
+        }
+      }
+    }
+    files = files.filter((f) => !pics.includes(f));
+    if (!files.length) return;
     const rejected = files.filter((f) => !ACCEPTED.test(f.name));
     const ok = files.filter((f) => ACCEPTED.test(f.name));
     if (rejected.length) {
@@ -41,7 +75,7 @@ export function useAttachments(onError: (title: string, body?: string) => void) 
     } finally {
       setUploading(false);
     }
-  }, [onError]);
+  }, [onError, images.length]);
 
   const indexing = items.some((a) => ["queued", "reading", "embedding"].includes(a.status));
 
@@ -63,7 +97,8 @@ export function useAttachments(onError: (title: string, body?: string) => void) 
   }, [indexing]);
 
   const remove = useCallback((id: number) => setItems((prev) => prev.filter((a) => a.id !== id)), []);
-  const clear = useCallback(() => setItems([]), []);
+  const removeImage = useCallback((id: string) => setImages((prev) => prev.filter((a) => a.id !== id)), []);
+  const clear = useCallback(() => { setItems([]); setImages([]); }, []);
 
-  return { items, uploading, indexing, add, remove, clear };
+  return { items, images, uploading, indexing, add, remove, removeImage, clear };
 }

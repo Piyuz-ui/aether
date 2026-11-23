@@ -18,6 +18,7 @@ from ..llm.parsing import ToolCallParseError, loads_lenient, strip_thinking
 from .embedder import Embedder, EmbeddingBackend
 from .facts import CATEGORIES, FactMemory
 from .knowledge import KnowledgeBase
+from .quizzes import QuizBook
 from .sessions import PersistentSession
 from .store import Store
 from .taskbook import TaskBook
@@ -50,6 +51,7 @@ class MemorySystem:
         self.facts = FactMemory(self.store, self.embedder)
         self.tasks = TaskBook(self.store)
         self.knowledge = KnowledgeBase(self.store, self.embedder, settings.data_dir / "knowledge")
+        self.quizzes = QuizBook(self.store, self.facts)
 
     def session(self, session_id: str | None = None) -> PersistentSession:
         return PersistentSession(self.store, session_id)
@@ -90,6 +92,11 @@ class MemorySystem:
                 parts.append(f"{label}'s classes ({day:%A}): " + "; ".join(
                     f"{c['start']}–{c['end']} {c['course']}" + (f" ({c['location']})" if c["location"] else "")
                     for c in classes))
+
+        weak = self.quizzes.weak_topics()
+        if weak:
+            parts.append("Weak quiz topics (focus study help here): " + ", ".join(
+                f"{w['topic']} ({round(100 * w['accuracy'])}%)" for w in weak[:6]))
 
         docs = [d for d in self.knowledge.documents() if d["status"] == "ready"]
         if docs:

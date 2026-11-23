@@ -215,3 +215,52 @@ def test_pptx_upload_through_the_api(make_client, tmp_path):
     assert doc["status"] == "ready" and doc["pages"] == 3
     old = c.post("/api/knowledge", files=[("files", ("old.ppt", b"legacy", "application/vnd.ms-powerpoint"))])
     assert old.status_code == 422 and ".pptx" in old.json()["detail"]["message"]
+
+
+def test_note_to_pdf_export(make_client):
+    c = make_client()
+    workspace().resolve("notes").mkdir(exist_ok=True)
+    workspace().resolve("notes/plan.md").write_text("# Study plan\n\n- Monday: DBMS\n")
+    r = c.post("/api/files/pdf", json={"path": "notes/plan.md"})
+    assert r.status_code == 200 and r.json()["path"] == "exports/plan.pdf"
+    assert c.get("/api/files/exports/plan.pdf").content.startswith(b"%PDF")
+    assert c.post("/api/files/pdf", json={"path": "../../etc/passwd"}).status_code == 404
+    assert c.post("/api/files/pdf", json={"path": "exports/plan.pdf"}).status_code == 422
+
+
+def test_quiz_endpoints(make_client):
+    from aether.tools.context import memory
+    c = make_client()
+    quiz = memory().quizzes.create("OS", [{"question": "q", "options": ["a", "b"], "answer": "a", "topic": "Paging"}])
+    assert c.get(f"/api/quizzes/{quiz['id']}").json()["questions"][0]["type"] == "mcq"
+    assert c.post(f"/api/quizzes/{quiz['id']}/answer", json={"index": 0, "correct": False}).json()["wrong"] == 1
+    assert c.get("/api/quiz-stats").json()[0]["topic"] == "Paging"
+    assert c.post(f"/api/quizzes/{quiz['id']}/answer", json={"index": 9, "correct": True}).status_code == 404
+
+
+def test_chat_accepts_images_and_validates_them(make_client):
+    import base64
+    png = base64.b64encode(b"\x89PNG\r\n\x1a\n" + b"\x00" * 16).decode()
+    c = make_client([say("I see an image.")])
+    with c.stream("POST", "/api/chat", json={"message": "what is this?", "images": [f"data:image/png;base64,{png}"]}) as r:
+        events = list(sse_events(r))
+    assert next(d for e, d in events if e == "done")["data"]["stats"]["model"] == "other-model"
+    sid = events[0][1]["session_id"]
+    assert c.get(f"/api/sessions/{sid}").json()["messages"][0]["images"] == 1
+    assert c.post("/api/chat", json={"message": "x", "images": ["not base64!!"]}).status_code == 422
+    assert c.post("/api/chat", json={"message": "x", "images": [png] * 5}).status_code == 422
+
+
+def test_tts_endpoints(make_client):
+    from tests.test_tts import FakeEngine
+    c = make_client()
+    c.app.state.ctx.tts.engine = FakeEngine()
+    st = c.get("/api/tts/status").json()
+    assert st["engine"] == "kokoro-fake" and len(st["voices"]) == 4
+    r = c.post("/api/tts/speak", json={"text": "Hello from **AETHER**.", "voice": "bm_george", "speed": 1.1})
+    assert r.status_code == 200 and r.headers["content-type"] == "audio/wav" and r.content[:4] == b"RIFF"
+    assert float(r.headers["x-audio-seconds"]) > 0
+    assert c.post("/api/tts/speak", json={"text": "```\ncode only\n```", "voice": "af_heart"}).status_code == 200
+    assert c.post("/api/tts/speak", json={"text": ""}).status_code == 422
+    c.app.state.ctx.tts.engine = None
+    assert c.post("/api/tts/speak", json={"text": "hi"}).status_code == 503

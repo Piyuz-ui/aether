@@ -90,6 +90,7 @@ export function useWakeWord(enabled: boolean, paused: boolean, onCommand: (text:
     const r = makeRecognition();
     if (!r) return;
     let alive = true;
+    let failures = 0;
     r.continuous = true;
     r.onresult = (e) => {
       for (let i = e.resultIndex; i < e.results.length; i++) {
@@ -103,15 +104,23 @@ export function useWakeWord(enabled: boolean, paused: boolean, onCommand: (text:
         }
       }
     };
-    r.onerror = () => undefined;
+    r.onerror = (e) => {
+      // Microphone blocked or unavailable: stop for good instead of re-asking in a loop.
+      if (["not-allowed", "service-not-allowed", "audio-capture"].includes(e.error)) alive = false;
+      else failures += 1;
+    };
     r.onend = () => {
-      if (alive) {
+      // Browsers stop continuous recognition now and then; restart, but back off and give up
+      // after repeated failures so we never spam permission prompts.
+      if (!alive || failures > 5) return;
+      setTimeout(() => {
+        if (!alive) return;
         try {
-          r.start(); // browsers stop continuous recognition periodically; keep it going
+          r.start();
         } catch {
           /* already started */
         }
-      }
+      }, 400 + failures * 1500);
     };
     try {
       r.start();

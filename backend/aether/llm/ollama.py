@@ -45,6 +45,7 @@ class OllamaClient:
             base_url=self.base_url, transport=transport,
             timeout=httpx.Timeout(timeout_s, connect=5.0))
         self._think_supported: dict[str, bool] = {}
+        self._caps: dict[str, set[str]] = {}
 
     async def aclose(self) -> None:
         await self._client.aclose()
@@ -83,6 +84,26 @@ class OllamaClient:
             f"None of the supported tool-calling models are installed "
             f"(installed: {', '.join(installed)}).",
             hint=f"Run: ollama pull {preferred}")
+
+    async def capabilities(self, model: str) -> set[str]:
+        """What a model can do, from Ollama: e.g. {"completion", "tools", "vision"}."""
+        if model not in self._caps:
+            try:
+                r = await self._client.post("/api/show", json={"model": model})
+                r.raise_for_status()
+                self._caps[model] = set(r.json().get("capabilities") or [])
+            except httpx.HTTPError:
+                return set()
+        return self._caps[model]
+
+    async def find_model_with(self, *needs: str, prefer: str = "") -> str | None:
+        """An installed model with all the given capabilities (the preferred one if it has them)."""
+        installed = await self.list_models()
+        ordered = ([prefer] if prefer in installed else []) + [m for m in installed if m != prefer]
+        for m in ordered:
+            if set(needs) <= await self.capabilities(m):
+                return m
+        return None
 
     # ------------------------------------------------------------------ chat
     async def chat_stream(self, *, model: str, messages: list[dict[str, Any]],

@@ -1,11 +1,15 @@
 "use client";
 
 /** Model switcher, system health, motion, voice and reminder settings. */
-import { CalendarDays, Cpu, Database, RefreshCw } from "lucide-react";
+import clsx from "clsx";
+import { motion } from "framer-motion";
+import { AudioLines, CalendarDays, Cpu, Database, Plug, RefreshCw, Volume2 } from "lucide-react";
 import { useState } from "react";
 
 import { api, ApiError } from "@/lib/api";
+import { jelly } from "@/lib/motion";
 import { usePrefs } from "@/lib/prefs";
+import { useVoice } from "@/lib/useNeuralVoice";
 import { requestNotifications } from "@/lib/reminders";
 import type { Health } from "@/lib/types";
 import { useLive } from "@/lib/useLive";
@@ -13,6 +17,114 @@ import { speechSupported } from "@/lib/voice";
 
 import { Chip, JiggleButton, Toggle } from "../ui";
 import { ErrorNote, inputClass, PanelTitle } from "./shared";
+
+const ENGINE_LABEL: Record<string, string> = {
+  "kokoro-mlx": "Kokoro · Apple GPU (MLX)", "kokoro-onnx": "Kokoro · local neural", fallback: "Browser voice (fallback)",
+};
+
+function NeuralVoiceSection() {
+  const { prefs, setPref } = usePrefs();
+  const voice = useVoice();
+  const st = voice.status;
+  const neural = st && st.engine !== "fallback";
+  const stateText = !st ? "checking…" : st.state === "downloading"
+    ? `downloading model ${Math.round((st.progress ?? 0) * 100)}%`
+    : st.state === "needs_download" ? "model downloads on first use (~350 MB)"
+    : st.state === "loading" ? "warming up…" : st.state === "ready" ? "warm & ready" : st.state === "idle" ? "loads on first use" : st.state;
+  return (
+    <section>
+      <PanelTitle title="AETHER's voice" hint="Natural speech generated on this Mac by Kokoro-82M. Nothing leaves your computer." />
+      <div className="glass-inset space-y-4 rounded-2xl p-3">
+        <div className="flex flex-wrap items-center gap-1.5">
+          <Chip tone={neural ? "seafoam" : "amber"}><AudioLines className="size-3" />{ENGINE_LABEL[st?.engine ?? ""] ?? st?.engine ?? "voice"}</Chip>
+          <Chip tone={st?.state === "ready" ? "glacier" : "mist"}>{stateText}</Chip>
+        </div>
+        {st?.hint && <p className="font-mono text-[11px] text-frost/75">→ {st.hint}</p>}
+        {st?.error && <p className="text-[11px] text-coral">{st.error.message} {st.error.hint}</p>}
+
+        <div className="grid grid-cols-2 gap-2" role="radiogroup" aria-label="Voice">
+          {(st?.voices ?? []).map((v) => {
+            const selected = prefs.voice === v.id;
+            const previewing = voice.speakingId === `preview:${v.id}` || voice.loadingId === `preview:${v.id}`;
+            return (
+              <motion.button key={v.id} type="button" role="radio" aria-checked={selected}
+                onClick={() => { setPref("voice", v.id); if (neural) { voice.unlock(); voice.preview(v.id); } }}
+                whileHover={{ scale: 1.03 }} whileTap={{ scale: 0.95 }} transition={jelly}
+                className={clsx("relative rounded-2xl border px-3 py-2.5 text-left transition-colors",
+                  selected ? "border-glacier/50 bg-sky/[0.14]" : "border-white/[0.08] bg-white/[0.03] hover:bg-white/[0.06]")}>
+                <div className="flex items-center gap-1.5 text-sm font-medium text-frost">
+                  {v.name}
+                  {previewing && <Volume2 className="size-3.5 animate-pulse text-seafoam" />}
+                </div>
+                <div className="text-[11px] text-mist">{v.description}</div>
+                <div className="text-[10px] uppercase tracking-wider text-mist/60">{v.accent}</div>
+              </motion.button>
+            );
+          })}
+        </div>
+
+        <label className="block">
+          <div className="mb-1.5 flex justify-between text-xs">
+            <span className="text-frost">Speaking speed</span>
+            <span className="font-mono text-glacier">{prefs.speed.toFixed(2)}×</span>
+          </div>
+          <input type="range" min={0.85} max={1.25} step={0.05} value={prefs.speed}
+            onChange={(e) => setPref("speed", Number(e.target.value))}
+            className="h-1.5 w-full cursor-pointer appearance-none rounded-full bg-white/10 accent-sky" aria-label="Speaking speed" />
+          <div className="mt-1 flex justify-between text-[10px] text-mist/60"><span>0.85×</span><span>1×</span><span>1.25×</span></div>
+        </label>
+
+        <div className="-mx-2">
+          <Toggle checked={prefs.speakReplies} onChange={(v) => { if (v) voice.unlock(); else voice.stop(); setPref("speakReplies", v); }}
+            label="Auto-speak replies" hint="Starts talking at the first finished sentence, while the rest is still being written." />
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function McpSection({ revision, toast }: { revision: number; toast: (t: string, b?: string) => void }) {
+  const mcp = useLive(api.mcp, revision, (d) => (d?.servers.some((s) => s.state === "starting") ? 1500 : 30_000));
+  const [reloading, setReloading] = useState(false);
+  const tone = { connected: "seafoam", error: "coral", disabled: "mist", starting: "glacier" } as const;
+  return (
+    <section>
+      <PanelTitle title="MCP servers" hint="External tools via the Model Context Protocol, from backend/mcp_servers.json."
+        action={<JiggleButton tone="ghost" className="px-2 py-1" aria-label="Reload MCP servers" disabled={reloading}
+          onClick={async () => {
+            setReloading(true);
+            try { await api.reloadMcp(); await mcp.reload(); toast("MCP servers reloaded"); }
+            catch (e) { toast(e instanceof ApiError ? e.message : "Reload failed"); }
+            finally { setReloading(false); }
+          }}>
+          <RefreshCw className={reloading ? "size-3.5 animate-spin" : "size-3.5"} />
+        </JiggleButton>} />
+      <div className="glass-inset space-y-2 rounded-2xl p-3">
+        {mcp.data && mcp.data.servers.length === 0 && (
+          <p className="text-xs leading-relaxed text-mist">
+            None yet. Copy <code className="font-mono text-glacier">mcp_servers.example.json</code> to{" "}
+            <code className="font-mono text-glacier">mcp_servers.json</code> in the backend folder (same format as
+            Claude Desktop), then reload.
+          </p>
+        )}
+        {mcp.data?.servers.map((s) => (
+          <div key={s.name} className="flex items-start gap-2.5">
+            <Plug className="mt-0.5 size-4 shrink-0 text-glacier" />
+            <div className="min-w-0 flex-1">
+              <div className="flex flex-wrap items-center gap-1.5">
+                <span className="text-sm text-frost">{s.name}</span>
+                <Chip tone={tone[s.state]}>{s.state}</Chip>
+                {s.state === "connected" && <Chip>{s.tools} tools</Chip>}
+                <Chip tone={s.approval === "never" ? "amber" : "mist"}>approval {s.approval}</Chip>
+              </div>
+              {s.error && <p className="mt-1 break-words text-[11px] text-coral">{s.error}</p>}
+            </div>
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
 
 export function SettingsPanel({ health, onHealthChange, revision, toast }: {
   health: Health | null;
@@ -71,6 +183,8 @@ export function SettingsPanel({ health, onHealthChange, revision, toast }: {
         </div>
       </section>
 
+      <McpSection revision={revision} toast={toast} />
+
       <section>
         <PanelTitle title="Feel" />
         <div className="glass-inset rounded-2xl p-1">
@@ -79,13 +193,14 @@ export function SettingsPanel({ health, onHealthChange, revision, toast }: {
         </div>
       </section>
 
+      <NeuralVoiceSection />
+
       <section>
-        <PanelTitle title="Voice" hint={voiceOk
-          ? "Speech recognition is provided by your browser. Chrome uses Google's servers; Safari can work on-device. Spoken replies are always local."
+        <PanelTitle title="Talking to AETHER" hint={voiceOk
+          ? "Speech recognition is provided by your browser. Chrome uses Google's servers; Safari can work on-device."
           : "Your browser doesn't support voice input. Try Chrome, Edge or Safari."} />
         <div className="glass-inset rounded-2xl p-1">
           <Toggle checked={prefs.autoSendVoice} onChange={(v) => setPref("autoSendVoice", v)} label="Send when I stop talking" />
-          <Toggle checked={prefs.speakReplies} onChange={(v) => setPref("speakReplies", v)} label="Read replies aloud" />
           <Toggle checked={prefs.wakeWord} onChange={(v) => setPref("wakeWord", v && voiceOk)} label="“Hey Aether” wake word"
             hint="Listens while this tab is open. Say “Hey Aether, …”." />
         </div>

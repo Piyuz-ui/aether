@@ -20,7 +20,7 @@ from typing import Any, Literal
 
 from fastapi import FastAPI, File, HTTPException, Request, Response, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from fastapi.responses import FileResponse
 from sse_starlette.sse import EventSourceResponse
 
@@ -30,6 +30,8 @@ from aether.engine import AetherAgent
 from aether.llm.ollama import OllamaClient, OllamaError
 from aether.memory import MemorySystem
 from aether.memory.knowledge import KnowledgeError
+from aether.mcp import MCPManager
+from tts import TTSError, TTSService
 from aether.memory.taskbook import TaskError
 from aether.tools import REGISTRY
 from aether.tools.context import set_memory, workspace
@@ -43,6 +45,8 @@ class AppContext:
     llm: Any
     memory: MemorySystem
     agent: AetherAgent
+    mcp: MCPManager
+    tts: TTSService
     busy_sessions: set[str] = field(default_factory=set)
     background: set[asyncio.Task[Any]] = field(default_factory=set)
 
@@ -63,13 +67,33 @@ def build_context(settings: Settings, llm: Any = None, db_path: str | None = Non
         return await memory.extract_facts(llm, model, goal, answer)
 
     agent = AetherAgent(settings, llm=llm, memory_provider=memory.build_context, after_turn=learn)
-    return AppContext(settings=settings, llm=llm, memory=memory, agent=agent)
+    return AppContext(settings=settings, llm=llm, memory=memory, agent=agent,
+                      mcp=MCPManager(settings.mcp_config), tts=TTSService(settings.data_dir / "tts"))
 
 
 # ------------------------------------------------------------------- schemas
 class ChatRequest(BaseModel):
     message: str = Field(min_length=1, max_length=20000)
     session_id: str | None = None
+    # base64 images (no "data:" prefix); up to 4, about 8 MB each
+    images: list[str] = Field(default_factory=list, max_length=4)
+
+    @field_validator("images")
+    @classmethod
+    def _valid_images(cls, v: list[str]) -> list[str]:
+        import base64
+        import binascii
+        out = []
+        for img in v:
+            img = img.split(",", 1)[1] if img.startswith("data:") else img
+            if len(img) > 11_500_000:
+                raise ValueError("Each image must be under about 8 MB.")
+            try:
+                base64.b64decode(img[:4096] + "=" * (-len(img[:4096]) % 4), validate=True)
+            except (binascii.Error, ValueError) as e:
+                raise ValueError("Images must be base64-encoded.") from e
+            out.append(img)
+        return out
 
 
 class ApprovalRequestBody(BaseModel):
@@ -110,6 +134,21 @@ class TaskPatch(BaseModel):
     done: bool | None = None
 
 
+class QuizAnswer(BaseModel):
+    index: int = Field(ge=0)
+    correct: bool
+
+
+class SpeakRequest(BaseModel):
+    text: str = Field(min_length=1, max_length=4000)
+    voice: str = "af_heart"
+    speed: float = Field(default=1.0, ge=0.5, le=2.0)
+
+
+class PdfRequest(BaseModel):
+    path: str = Field(min_length=1, max_length=500)
+
+
 class ClassIn(BaseModel):
     course: str = Field(min_length=1, max_length=200)
     day: str
@@ -127,6 +166,8 @@ def create_app(settings: Settings | None = None, *, llm: Any = None,
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         ctx = build_context(settings, llm, db_path)
         app.state.ctx = ctx
+        # External MCP servers start in the background so a slow one never delays AETHER.
+        ctx.spawn(ctx.mcp.start_all())
         # Resume indexing of any documents interrupted by a previous shutdown.
         for d in ctx.memory.knowledge.documents():
             if d["status"] in {"queued", "reading", "embedding"}:
@@ -134,6 +175,7 @@ def create_app(settings: Settings | None = None, *, llm: Any = None,
         yield
         for task in list(ctx.background):
             task.cancel()
+        await ctx.mcp.stop_all()
         with contextlib.suppress(Exception):
             await ctx.llm.aclose()
         ctx.memory.close()
@@ -196,6 +238,44 @@ def create_app(settings: Settings | None = None, *, llm: Any = None,
         ctx.agent.set_model(body.model)
         return {"current": body.model}
 
+    # ------------------------------------------------------------- voice
+    @app.get("/api/tts/status")
+    async def tts_status(request: Request) -> dict[str, Any]:
+        return ctx_of(request).tts.status()
+
+    @app.post("/api/tts/warmup")
+    async def tts_warmup(request: Request) -> dict[str, Any]:
+        """Load the voice model now, so the first sentence plays instantly."""
+        ctx = ctx_of(request)
+        try:
+            return await ctx.tts.warmup()
+        except TTSError as e:
+            raise HTTPException(503, detail={"message": e.message, "hint": e.hint}) from e
+
+    @app.post("/api/tts/speak")
+    async def tts_speak(body: SpeakRequest, request: Request) -> Response:
+        """Synthesise one chunk (usually a sentence) and return it as WAV audio."""
+        try:
+            clip = await ctx_of(request).tts.speak(body.text, body.voice, body.speed)
+        except TTSError as e:
+            raise HTTPException(503 if "installed" in e.message or "download" in e.message else 422,
+                                detail={"message": e.message, "hint": e.hint}) from e
+        return Response(clip.wav, media_type="audio/wav", headers={
+            "X-Audio-Seconds": f"{clip.seconds:.3f}", "X-Synth-Seconds": f"{clip.synth_seconds:.3f}",
+            "Cache-Control": "no-store", "Access-Control-Expose-Headers": "X-Audio-Seconds, X-Synth-Seconds"})
+
+    @app.get("/api/mcp")
+    async def mcp_status(request: Request) -> dict[str, Any]:
+        ctx = ctx_of(request)
+        return {"config": str(ctx.settings.mcp_config), "exists": ctx.settings.mcp_config.exists(),
+                "servers": ctx.mcp.summary()}
+
+    @app.post("/api/mcp/reload")
+    async def mcp_reload(request: Request) -> dict[str, Any]:
+        ctx = ctx_of(request)
+        await ctx.mcp.reload()
+        return {"servers": ctx.mcp.summary()}
+
     @app.get("/api/tools")
     async def tools() -> list[dict[str, Any]]:
         return [{"name": t.name, "description": t.description, "category": t.category,
@@ -217,7 +297,8 @@ def create_app(settings: Settings | None = None, *, llm: Any = None,
             try:
                 yield {"event": "session", "id": "0",
                        "data": json.dumps({"session_id": session.id})}
-                async with contextlib.aclosing(ctx.agent.run(body.message, session)) as events:
+                async with contextlib.aclosing(ctx.agent.run(body.message, session,
+                                                             images=body.images or None)) as events:
                     async for event in events:
                         seq += 1
                         yield {"event": event.type.value, "id": str(seq), "data": event.to_json()}
@@ -345,6 +426,41 @@ def create_app(settings: Settings | None = None, *, llm: Any = None,
         return FileResponse(target, filename=target.name,
                             content_disposition_type="attachment" if download else "inline")
 
+    @app.post("/api/files/pdf")
+    async def note_to_pdf(body: PdfRequest) -> dict[str, Any]:
+        """One-click export: turn a Markdown note into a PDF in exports/."""
+        from aether.tools.documents import markdown_to_pdf
+        try:
+            src = workspace().resolve(body.path, must_exist=True)
+        except WorkspaceError as e:
+            raise HTTPException(404, detail={"message": str(e)}) from e
+        if src.suffix.lower() not in {".md", ".markdown", ".txt"}:
+            raise HTTPException(422, detail={"message": "Only Markdown or text notes can be exported."})
+        out = workspace().resolve(f"exports/{src.stem}.pdf")
+        title = src.stem.replace("-", " ").strip().capitalize() or "Note"
+        pages = await asyncio.to_thread(markdown_to_pdf, src.read_text(encoding="utf-8", errors="replace"),
+                                        title, out)
+        return {"path": workspace().relative(out), "pages": pages}
+
+    @app.get("/api/quizzes/{quiz_id}")
+    async def quiz(quiz_id: int, request: Request) -> dict[str, Any]:
+        q = ctx_of(request).memory.quizzes.get(quiz_id)
+        if not q:
+            raise HTTPException(404, detail={"message": "No such quiz."})
+        return q
+
+    @app.post("/api/quizzes/{quiz_id}/answer")
+    async def quiz_answer(quiz_id: int, body: QuizAnswer, request: Request) -> dict[str, Any]:
+        from aether.memory.quizzes import QuizError
+        try:
+            return await ctx_of(request).memory.quizzes.record(quiz_id, body.index, body.correct)
+        except QuizError as e:
+            raise HTTPException(404, detail={"message": str(e)}) from e
+
+    @app.get("/api/quiz-stats")
+    async def quiz_stats(request: Request) -> list[dict[str, Any]]:
+        return ctx_of(request).memory.quizzes.stats()
+
     @app.get("/api/calendar.ics")
     async def calendar(request: Request) -> Response:
         """Deadlines and weekly classes as an iCalendar file (Apple/Google Calendar import)."""
@@ -469,7 +585,10 @@ def transcript(turns: list[list[dict[str, Any]]]) -> list[dict[str, Any]]:
         pending: list[dict[str, Any]] = []
         for m in turn:
             if m["role"] == "user":
-                out.append({"role": "user", "content": m["content"]})
+                msg = {"role": "user", "content": m["content"]}
+                if (m.get("meta") or {}).get("images"):
+                    msg["images"] = m["meta"]["images"]
+                out.append(msg)
             elif m["role"] == "assistant" and m.get("tool_calls"):
                 if m["content"]:
                     steps.append({"type": "thought", "text": m["content"]})
@@ -485,7 +604,8 @@ def transcript(turns: list[list[dict[str, Any]]]) -> list[dict[str, Any]]:
                 step["ok"] = not content.startswith("ERROR: ")
                 step["output"] = content.removeprefix("ERROR: ")
             elif m["role"] == "assistant":
-                out.append({"role": "assistant", "content": m["content"], "steps": steps})
+                out.append({"role": "assistant", "content": m["content"], "steps": steps,
+                            "stats": (m.get("meta") or {}).get("stats")})
                 steps = []
     return out
 

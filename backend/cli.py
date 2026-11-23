@@ -29,6 +29,7 @@ from aether import __version__
 from aether.config import get_settings
 from aether.engine import AetherAgent, Session
 from aether.llm.ollama import OllamaClient
+from aether.mcp import MCPManager
 from aether.memory import MemorySystem
 from aether.memory.knowledge import KnowledgeError
 from aether.tools.context import set_memory
@@ -64,6 +65,7 @@ HELP = """\
 | `/tasks` · `/timetable` | your deadlines and weekly classes |
 | `/sessions` · `/resume <n>` | past conversations, and continue one |
 | `/tools` | list tools and which ones need approval |
+| `/mcp` | external MCP servers from mcp_servers.json · `/mcp reload` restarts them |
 | `/model [name]` | show installed models, or switch to one |
 | `/stats` | tokens, context and timing for this session |
 | `/verbose` | show full tool output on/off |
@@ -150,6 +152,7 @@ class CLI:
                                  memory_provider=self.memory.build_context, after_turn=learn)
         if model:
             self.agent.set_model(model)
+        self.mcp = MCPManager(self.settings.mcp_config)
         self.session: Session = self.memory.session()
         self.view = StreamView()
         self.verbose = False
@@ -246,6 +249,9 @@ class CLI:
             self.view.stop()
 
     async def banner(self) -> bool:
+        if self.settings.mcp_config.exists():
+            with console.status(Text(" connecting MCP servers…", style="glacier"), spinner="dots12"):
+                await self.mcp.start_all()
         title = Text("◉ ", style="sky") + Text("A E T H E R", style="glacier.bold")
         title.append(f"   v{__version__} · local autonomous agent", style="mist")
         try:
@@ -298,6 +304,20 @@ class CLI:
                 for m in models:
                     mark = "◉" if m == self.agent.model else "○"
                     console.print(Text(f" {mark} {m}", style="glacier" if mark == "◉" else "mist"))
+        elif cmd == "mcp":
+            if arg == "reload":
+                with console.status(Text(" restarting MCP servers…", style="glacier")):
+                    await self.mcp.reload()
+            servers = self.mcp.summary()
+            if not servers:
+                console.print(Text(f"No MCP servers configured. Copy mcp_servers.example.json to "
+                                   f"{self.settings.mcp_config.name} to add some.", style="mist"))
+            for srv in servers:
+                style = {"connected": "seafoam", "error": "danger", "disabled": "mist"}.get(srv["state"], "warn")
+                console.print(f"  [{style}]●[/] [glacier]{srv['name']}[/] [mist]{srv['state']} · "
+                              f"{srv['tools']} tools · approval {srv.get('approval', 'auto')}[/]")
+                if srv.get("error"):
+                    console.print(Text(f"      {srv['error']}", style="mist"))
         elif cmd == "stats":
             self._print_stats()
         elif cmd == "verbose":
@@ -461,6 +481,8 @@ def main() -> None:
     finally:
         with contextlib.suppress(Exception):
             loop.run_until_complete(cli.agent.llm.aclose())  # type: ignore[attr-defined]
+        with contextlib.suppress(Exception):
+            loop.run_until_complete(cli.mcp.stop_all())
         cli.memory.close()
         loop.close()
 

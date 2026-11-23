@@ -83,6 +83,15 @@ class FakeLLM:
     async def health(self) -> bool:
         return True
 
+    caps: dict[str, set[str]] = {"fake-model": {"completion", "tools"},
+                                 "other-model": {"completion", "tools", "vision"}}
+
+    async def capabilities(self, model: str) -> set[str]:
+        return self.caps.get(model, set())
+
+    async def find_model_with(self, *needs: str, prefer: str = "") -> str | None:
+        return next((m for m, c in self.caps.items() if set(needs) <= c), None)
+
     async def list_models(self) -> list[str]:
         return ["fake-model", "other-model"]
 

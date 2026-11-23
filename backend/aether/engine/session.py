@@ -10,6 +10,9 @@ from dataclasses import dataclass, field
 from typing import Any
 
 
+MODEL_KEYS = ("role", "content", "tool_calls", "tool_name")
+
+
 @dataclass
 class Session:
     id: str = field(default_factory=lambda: uuid.uuid4().hex[:12])
@@ -31,7 +34,9 @@ class Session:
                 break
             kept.append(turn)
             used += size
-        return [m for turn in reversed(kept) for m in turn]
+        # Only what the model should see: no UI metadata, no images from earlier turns.
+        return [{k: v for k, v in m.items() if k in MODEL_KEYS}
+                for turn in reversed(kept) for m in turn]
 
     def clear(self) -> None:
         self.turns.clear()

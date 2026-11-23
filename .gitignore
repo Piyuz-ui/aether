@@ -27,3 +27,6 @@ frontend/.next/
 frontend/next-env.d.ts
 frontend/*.tsbuildinfo
 frontend/.env.local
+
+# MCP config may contain tokens
+backend/mcp_servers.json

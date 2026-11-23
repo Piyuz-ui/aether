@@ -22,6 +22,12 @@ markdown==3.11.3
 # ---- PowerPoint (.pptx) reading ----
 python-pptx==1.0.2
 
+# ---- Neural voice: Kokoro-82M (ONNX). Model files download on first use (~350 MB). ----
+# Optional faster engine on Apple Silicon (needs Python ≤ 3.13 for spaCy):
+#   pip install mlx-audio "misaki[en]"
+kokoro-onnx==0.4.7
+soundfile==0.14.0
+
 # ---- Development ----
 pytest==9.2.0
 pytest-asyncio==1.5.0

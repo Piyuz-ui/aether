@@ -28,6 +28,17 @@ from .safety import ApprovalBroker
 from .session import Session
 
 MemoryProvider = Callable[[str], Awaitable[str]]
+# Requests that only make sense with a specific tool. If the model answers in plain text
+# instead, it's sent back once to use the tool (e.g. quizzes must be interactive cards).
+INTENT_TOOLS: list[tuple[re.Pattern[str], str, str]] = [
+    (re.compile(r"\b(quiz|test) me\b|\b(make|create|give|generate|build)\s+(me\s+)?(an?\s+)?(quick\s+|short\s+)?"
+                r"(quiz|test|mcqs?|flash ?cards?)\b|\bflash ?cards?\b|\bmcqs?\b", re.IGNORECASE), "make_quiz",
+     "The user asked for a quiz. Call make_quiz now with 4–6 questions (multiple choice, 4 options "
+     "each) built from what you found, so it appears as interactive cards. Don't write the "
+     "questions as text."),
+    (re.compile(r"\b(as|in|into|to|make|create|export|save|generate)\b[^?!\n]{0,30}?\.?pdf\b", re.IGNORECASE),
+     "create_pdf", "The user asked for a PDF. Call create_pdf now (with `source` or `content`)."),
+]
 # "I'll use manage_timetable…", "let me call web_search" — a promise of a tool call.
 PROMISE_RE = re.compile(r"\b(i'll|i will|i'm going to|let me|let's|now i|next,? i)\b", re.IGNORECASE)
 # after_turn(goal, answer, model) → facts learned (shown to the user as a `memory` event)
@@ -76,8 +87,9 @@ class AetherAgent:
                 "num_predict": self.settings.max_output_tokens}
 
     # ------------------------------------------------------------------ loop
-    async def run(self, goal: str, session: Session, *,
-                  run_id: str | None = None) -> AsyncIterator[AgentEvent]:
+    async def run(self, goal: str, session: Session, *, run_id: str | None = None,
+                  images: list[str] | None = None) -> AsyncIterator[AgentEvent]:
+        """Work on `goal`. `images` are base64-encoded pictures sent with it (vision)."""
         run_id = run_id or uuid.uuid4().hex[:12]
         s = self.settings
         step = 0
@@ -88,20 +100,42 @@ class AetherAgent:
 
         try:
             model = await self.ensure_model()
+            switched_for_vision = False
+            if images:
+                vision_model = await self._vision_model(model)
+                if vision_model is None:
+                    raise OllamaError(
+                        "None of your installed models can look at images.",
+                        hint="Pull a vision model, e.g.: ollama pull qwen3.5:4b (or gemma3, llava).")
+                switched_for_vision = vision_model != model
+                model = vision_model
             stats = RunStats(model=model, context_limit=s.context_length)
             yield ev(EventType.STATUS, state=AgentState.THINKING, run_id=run_id, model=model)
+            if switched_for_vision:
+                yield ev(EventType.THOUGHT, kind="info",
+                         text=f"Looking at your image{'s' * (len(images or []) > 1)} with {model} "
+                              f"(it can see images; {self.model} can't).")
 
             memory_context = await self.memory_provider(goal) if self.memory_provider else ""
-            turn: list[dict[str, Any]] = [{"role": "user", "content": goal}]
+            # What's saved to history: the text, plus a note of how many images there were
+            # (images themselves are big and only needed for this turn).
+            user_saved: dict[str, Any] = {"role": "user", "content": goal}
+            if images:
+                user_saved["meta"] = {"images": len(images)}
+            turn: list[dict[str, Any]] = [user_saved]
+            user_for_model: dict[str, Any] = {"role": "user", "content": goal}
+            if images:
+                user_for_model["images"] = images
             messages: list[dict[str, Any]] = [
                 {"role": "system", "content": build_system_prompt(
                     agent_name=s.agent_name, user_name=s.user_name, memory_context=memory_context)},
-                *session.history(s.history_chars), *turn]
+                *session.history(s.history_chars), user_for_model]
             tools = self.registry.schemas()
             known = self.registry.names
             format_retries = 0
             nudges = 0
             unresolved: dict[str, str] = {}  # tool → error of a failed call not yet fixed
+            used_ok: set[str] = set()        # tools that succeeded this turn
             answer: str | None = None
 
             while step < s.max_steps:
@@ -153,7 +187,7 @@ class AetherAgent:
                         messages += [{"role": "assistant", "content": content},
                                      {"role": "user", "content": FORMAT_RETRY_MESSAGE}]
                         continue
-                    nudge = self._nudge(content, unresolved, known)
+                    nudge = self._nudge(content, unresolved, known, goal, used_ok)
                     if nudge and nudges < s.max_nudges:
                         # The model tried to finish with a broken tool call it never fixed,
                         # or promised a tool it never called. Send it back once, precisely.
@@ -183,6 +217,8 @@ class AetherAgent:
                         yield e
                     result = result_holder[0]
                     stats.tool_seconds.append((name, result.duration_s))
+                    if result.ok:
+                        used_ok.add(name)
                     if result.ok or result.denied:
                         unresolved.pop(name, None)
                     else:
@@ -208,9 +244,11 @@ class AetherAgent:
 
             if not answer:
                 answer = "I couldn't come up with an answer for that. Could you rephrase it?"
-            turn.append({"role": "assistant", "content": answer})
-            session.add_turn(turn)
             stats.wall_s = time.perf_counter() - started
+            # `meta` is saved with the conversation (telemetry survives reloads) but never
+            # sent back to the model: Session.history() strips it.
+            turn.append({"role": "assistant", "content": answer, "meta": {"stats": stats.to_dict()}})
+            session.add_turn(turn)
             yield ev(EventType.STATUS, state=AgentState.IDLE)
             yield ev(EventType.DONE, answer=answer, run_id=run_id, stats=stats.to_dict())
 
@@ -238,6 +276,19 @@ class AetherAgent:
             self.broker.cancel_run(run_id)
 
     # --------------------------------------------------------------- helpers
+    async def _vision_model(self, current: str) -> str | None:
+        """The current model if it can see images, else an installed one that can."""
+        caps_fn = getattr(self.llm, "capabilities", None)
+        if caps_fn is None:
+            return current  # a backend without capability info: just try
+        if "vision" in await caps_fn(current):
+            return current
+        finder = getattr(self.llm, "find_model_with", None)
+        if finder is None:
+            return None
+        return (await finder("vision", "tools", prefer=self.settings.vision_model)
+                or await finder("vision", prefer=self.settings.vision_model))
+
     async def _until_settled(self, stream: AsyncIterator[ChatDelta],
                              have_calls: Callable[[], bool]) -> AsyncIterator[ChatDelta]:
         """Relay a model stream, but once tool calls have arrived, give up waiting after
@@ -260,8 +311,14 @@ class AetherAgent:
                     await aclose()
 
     @staticmethod
-    def _nudge(answer: str, unresolved: dict[str, str], known: set[str]) -> tuple[str, str] | None:
+    def _nudge(answer: str, unresolved: dict[str, str], known: set[str], goal: str = "",
+               used_ok: set[str] | None = None) -> tuple[str, str] | None:
         """(note for the user, message for the model) when a final answer shouldn't stand yet."""
+        for pattern, tool, instruction in INTENT_TOOLS:
+            if tool in known and tool not in (used_ok or set()) and tool not in unresolved \
+                    and pattern.search(goal):
+                return (f"You asked for something {tool} makes, so I'm asking the model to use it.",
+                        instruction)
         if unresolved:
             name, error = next(iter(unresolved.items()))
             return (f"{name} failed and wasn't fixed, so I'm asking the model to correct it.",

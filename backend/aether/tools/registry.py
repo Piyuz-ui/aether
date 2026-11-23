@@ -95,6 +95,7 @@ class ToolRegistry:
              risk_summary: Callable[[dict[str, Any]], str] | None = None,
              timeout_s: float | None = None,
              precheck: Callable[[dict[str, Any]], None] | None = None,
+             schemas: dict[str, dict[str, Any]] | None = None,
              ) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
         params = params or {}
 
@@ -103,7 +104,7 @@ class ToolRegistry:
             props: dict[str, Any] = {}
             required: list[str] = []
             for pname, p in inspect.signature(fn).parameters.items():
-                prop = _schema_for(hints.get(pname, str))
+                prop = dict((schemas or {}).get(pname) or _schema_for(hints.get(pname, str)))
                 desc = params.get(pname, "")
                 if p.default is inspect.Parameter.empty:
                     required.append(pname)
@@ -123,6 +124,15 @@ class ToolRegistry:
             return fn
 
         return decorator
+
+    def register_spec(self, spec: ToolSpec) -> None:
+        """Register a tool built at runtime (e.g. discovered from an MCP server)."""
+        if spec.name in self._tools:
+            raise ValueError(f"Tool '{spec.name}' is registered twice.")
+        self._tools[spec.name] = spec
+
+    def unregister(self, name: str) -> None:
+        self._tools.pop(name, None)
 
     # ---------------------------------------------------------------- query
     def get(self, name: str) -> ToolSpec | None:
@@ -218,7 +228,17 @@ def _coerce(value: Any, schema: dict[str, Any]) -> Any:
         if isinstance(value, list):
             return value
         if isinstance(value, str):
-            return [v.strip() for v in value.split(",") if v.strip()]
+            text = value.strip()
+            if text[:1] in "[{":  # a JSON list (or object) sent as a string
+                from ..llm.parsing import ToolCallParseError, loads_lenient
+                try:
+                    parsed = loads_lenient(text)
+                    return parsed if isinstance(parsed, list) else [parsed]
+                except ToolCallParseError as e:
+                    raise ValueError from e
+            return [v.strip() for v in text.split(",") if v.strip()]
+        if isinstance(value, dict):
+            return [value]
         raise TypeError
     return value
 

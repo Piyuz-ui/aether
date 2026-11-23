@@ -33,7 +33,7 @@ type State = {
 };
 
 type Action =
-  | { type: "start"; user: string; id: string }
+  | { type: "start"; user: string; id: string; images?: string[] }
   | { type: "session"; id: string }
   | { type: "event"; event: AgentEvent }
   | { type: "end"; stopped?: boolean; error?: { message: string; hint?: string } }
@@ -66,7 +66,7 @@ function reducer(state: State, action: Action): State {
         agentState: "thinking",
         messages: [
           ...state.messages,
-          { id: uid(), role: "user", content: action.user },
+          { id: uid(), role: "user", content: action.user, images: action.images },
           { id: action.id, role: "assistant", steps: [], draft: "", thinking: "", content: "", status: "streaming" },
         ],
       };
@@ -187,9 +187,10 @@ function applyEvent(state: State, e: AgentEvent): State {
 export function transcriptToMessages(transcript: TranscriptMessage[]): Message[] {
   return transcript.map((t) =>
     t.role === "user"
-      ? { id: uid(), role: "user", content: t.content }
+      ? { id: uid(), role: "user", content: t.content, imageCount: t.images }
       : {
           id: uid(), role: "assistant", content: t.content, draft: "", thinking: "", status: "done",
+          stats: t.stats ?? undefined,
           steps: t.steps.map((s): Step => s.type === "thought"
             ? { kind: "thought", text: s.text }
             : { kind: "tool", callId: uid(), name: s.name, args: s.args ?? {}, risk: "safe", icon: "",
@@ -221,18 +222,19 @@ export function useAgent(options?: { onAnswer?: (text: string) => void; onLearne
     if (last) void loadSession(last);
   }, [loadSession]);
 
-  const send = useCallback(async (text: string) => {
-    const goal = text.trim();
+  const send = useCallback(async (text: string, images?: string[]) => {
+    const goal = text.trim() || (images?.length ? "What's in this image?" : "");
     if (!goal || controller.current) return;
     const ac = new AbortController();
     controller.current = ac;
-    dispatch({ type: "start", user: goal, id: uid() });
+    dispatch({ type: "start", user: goal, id: uid(), images });
     let error: { message: string; hint?: string } | undefined;
     try {
       const res = await fetch(`${API_BASE}/api/chat`, {
         method: "POST",
         headers: { "Content-Type": "application/json", Accept: "text/event-stream" },
-        body: JSON.stringify({ message: goal, session_id: stateRef.current.sessionId }),
+        body: JSON.stringify({ message: goal, session_id: stateRef.current.sessionId,
+          images: (images ?? []).map((d) => d.slice(d.indexOf(",") + 1)) }),
         signal: ac.signal,
       });
       if (!res.ok) {

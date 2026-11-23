@@ -3,16 +3,21 @@
 /** Chat messages: user bubbles, and assistant replies with their live agent trace. */
 import clsx from "clsx";
 import { motion } from "framer-motion";
-import { AlertTriangle, Brain, Download, FileText, Gauge, Square } from "lucide-react";
+import { AlertTriangle, Brain, Download, FileText, Square, Volume2 } from "lucide-react";
 import { memo } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
 import { api } from "@/lib/api";
+import { filesIn, useOpenArtifact } from "@/lib/artifacts";
+import { useVoice } from "@/lib/useNeuralVoice";
 import { jelly, popIn } from "@/lib/motion";
 import type { AssistantMessage, Message } from "@/lib/types";
 
+import { QuizDeck } from "./QuizDeck";
+import { TelemetryChip } from "./Telemetry";
 import { ThoughtLine, ToolPill } from "./ToolPill";
+import { Spinner } from "./ui";
 
 export const Markdown = memo(function Markdown({ text, streaming }: { text: string; streaming?: boolean }) {
   return (
@@ -31,38 +36,60 @@ export const Markdown = memo(function Markdown({ text, streaming }: { text: stri
   );
 });
 
-function Stats({ m }: { m: AssistantMessage }) {
-  const s = m.stats;
-  if (!s) return null;
-  const items = [
-    `${s.wall_s.toFixed(1)} s`,
-    `${s.prompt_tokens.toLocaleString()} in · ${s.output_tokens.toLocaleString()} out`,
-    `context ${Math.round(s.context_pct)}%`,
-    `${Math.round(s.tokens_per_s)} tok/s`,
-  ];
-  return (
-    <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 font-mono text-[10.5px] text-mist/75"
-      title={`${s.model} · ${s.model_calls} model call(s) · ${s.context_used.toLocaleString()} of ${s.context_limit.toLocaleString()} context tokens`}>
-      <Gauge className="size-3" />
-      {items.map((t) => <span key={t}>{t}</span>)}
-    </div>
-  );
-}
-
-const FILE_RE = /\b((?:exports|notes)\/[^\s'"`),;]+?\.(?:pdf|md))\b/g;
-
 /** Files the agent created this turn (PDFs, notes), from successful tool results. */
 function createdFiles(m: AssistantMessage): string[] {
   const found = new Set<string>();
   for (const s of m.steps) {
-    if (s.kind !== "tool" || s.status !== "ok" || !s.output) continue;
+    if (s.kind !== "tool" || s.status !== "ok") continue;
     if (!["create_pdf", "write_note"].includes(s.name)) continue;
-    for (const match of s.output.matchAll(FILE_RE)) found.add(match[1]);
+    filesIn(s.output).forEach((f) => found.add(f));
   }
   return [...found];
 }
 
+/** What gets read aloud: the answer, or a short line when a quiz card is shown instead. */
+export function spokenText(m: AssistantMessage): string {
+  return quizIds(m).length && m.content.length > 220 ? "Your quiz is ready. Tap an answer to begin." : m.content;
+}
+
+function ListenButton({ id, text }: { id: string; text: string }) {
+  const voice = useVoice();
+  const playing = voice.speakingId === id;
+  const loading = voice.loadingId === id;
+  return (
+    <motion.button type="button" whileHover={{ scale: 1.05 }} whileTap={{ scale: 0.92 }} transition={jelly}
+      onClick={() => { voice.unlock(); if (playing || loading) voice.stop(); else voice.speak(id, text); }}
+      aria-label={playing ? "Stop reading" : "Read this reply aloud"} title={playing ? "Stop" : "Listen"}
+      className={clsx("mt-3 inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] transition-colors",
+        playing ? "border-seafoam/40 bg-seafoam/[0.12] text-seafoam" : "border-white/[0.08] bg-abyss-950/30 text-mist hover:border-glacier/30 hover:text-frost")}>
+      {loading ? <Spinner className="size-3" /> : playing ? <Equalizer /> : <Volume2 className="size-3.5" />}
+      {playing ? "Stop" : loading ? "Preparing" : "Listen"}
+    </motion.button>
+  );
+}
+
+function Equalizer() {
+  return (
+    <span className="flex h-3 items-end gap-[2px]" aria-hidden>
+      {[0, 1, 2, 3].map((i) => (
+        <motion.span key={i} className="w-[2px] rounded-full bg-seafoam"
+          animate={{ height: ["30%", "100%", "45%", "85%", "30%"] }}
+          transition={{ duration: 0.9, repeat: Infinity, delay: i * 0.12, ease: "easeInOut" }} />
+      ))}
+    </span>
+  );
+}
+
+function quizIds(m: AssistantMessage): number[] {
+  return m.steps.flatMap((s) => {
+    if (s.kind !== "tool" || s.name !== "make_quiz" || s.status !== "ok") return [];
+    const id = s.output?.match(/Quiz #(\d+)/)?.[1];
+    return id ? [Number(id)] : [];
+  });
+}
+
 function FileChips({ files }: { files: string[] }) {
+  const open = useOpenArtifact();
   if (!files.length) return null;
   return (
     <div className="flex flex-wrap gap-2">
@@ -72,9 +99,9 @@ function FileChips({ files }: { files: string[] }) {
           <motion.div key={f} variants={popIn} initial="hidden" animate="show"
             className="glass flex items-center gap-1 rounded-2xl py-1 pl-3 pr-1">
             <FileText className={clsx("size-4", isPdf ? "text-coral" : "text-periwinkle")} />
-            <motion.a href={api.fileUrl(f)} target="_blank" rel="noreferrer" whileHover={{ scale: 1.03 }}
-              whileTap={{ scale: 0.95 }} transition={jelly}
-              className="px-1.5 py-1 text-sm text-frost hover:text-glacier">{f.split("/").pop()}</motion.a>
+            <motion.button type="button" onClick={() => open(f)} whileHover={{ scale: 1.03 }}
+              whileTap={{ scale: 0.95 }} transition={jelly} title="Preview"
+              className="px-1.5 py-1 text-sm text-frost hover:text-glacier">{f.split("/").pop()}</motion.button>
             <motion.a href={api.fileUrl(f, true)} aria-label={`Download ${f}`} title="Download"
               whileHover={{ scale: 1.1 }} whileTap={{ scale: 0.9 }} transition={jelly}
               className="grid size-8 place-items-center rounded-xl bg-gradient-to-br from-sky/30 to-periwinkle/25 text-glacier">
@@ -89,7 +116,11 @@ function FileChips({ files }: { files: string[] }) {
 
 function AssistantBubble({ m }: { m: AssistantMessage }) {
   const streaming = m.status === "streaming";
-  const visible = m.content || m.draft;
+  const quizzes = quizIds(m);
+  // Small models often repeat the quiz as text even though the cards show it: keep it short.
+  const visible = quizzes.length && !streaming && m.content.length > 220
+    ? "Your quiz is ready. Tap an answer to begin. 👇"
+    : m.content || m.draft;
   return (
     <div className="flex flex-col gap-2">
       {m.steps.length > 0 && (
@@ -108,9 +139,13 @@ function AssistantBubble({ m }: { m: AssistantMessage }) {
           {m.status === "stopped" && (
             <div className="mt-2 flex items-center gap-1.5 text-xs text-amber"><Square className="size-3" /> stopped</div>
           )}
-          <Stats m={m} />
+          <div className="flex flex-wrap items-end justify-between gap-2">
+            <TelemetryChip m={m} />
+            {m.status === "done" && m.content && <ListenButton id={m.id} text={spokenText(m)} />}
+          </div>
         </motion.div>
       )}
+      {quizzes.map((id) => <QuizDeck key={id} quizId={id} />)}
       <FileChips files={createdFiles(m)} />
       {m.status === "error" && m.error && (
         <div className="rounded-3xl border border-coral/30 bg-coral/[0.08] px-5 py-4 text-sm">
@@ -136,8 +171,23 @@ export function MessageView({ message }: { message: Message }) {
     <motion.div variants={popIn} initial="hidden" animate="show" layout="position"
       className={clsx("flex w-full", message.role === "user" ? "justify-end" : "justify-start")}>
       {message.role === "user" ? (
-        <div className="max-w-[85%] whitespace-pre-wrap rounded-3xl rounded-br-lg border border-sky/25 bg-gradient-to-br from-sky/25 to-periwinkle/15 px-4.5 py-3 text-[0.95rem] leading-relaxed text-frost shadow-[0_10px_30px_rgba(2,10,28,0.4)] backdrop-blur-xl">
+        <div className="flex max-w-[85%] flex-col items-end gap-2">
+          {message.images && message.images.length > 0 && (
+            <div className="flex flex-wrap justify-end gap-2">
+              {message.images.map((src, i) => (
+                <motion.img key={i} src={src} alt={`Attached image ${i + 1}`} variants={popIn} initial="hidden" animate="show"
+                  className="max-h-48 max-w-[260px] rounded-2xl border border-white/15 object-cover shadow-[0_10px_30px_rgba(2,10,28,0.45)]" />
+              ))}
+            </div>
+          )}
+          {!message.images?.length && !!message.imageCount && (
+            <span className="rounded-full border border-white/10 bg-white/[0.05] px-2.5 py-0.5 text-[11px] text-mist">
+              🖼 {message.imageCount} image{message.imageCount > 1 ? "s" : ""} attached
+            </span>
+          )}
+        <div className="max-w-full whitespace-pre-wrap rounded-3xl rounded-br-lg border border-sky/25 bg-gradient-to-br from-sky/25 to-periwinkle/15 px-4.5 py-3 text-[0.95rem] leading-relaxed text-frost shadow-[0_10px_30px_rgba(2,10,28,0.4)] backdrop-blur-xl">
           {message.content}
+        </div>
         </div>
       ) : (
         <div className="w-full max-w-[92%]"><AssistantBubble m={message} /></div>

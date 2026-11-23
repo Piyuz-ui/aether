@@ -63,7 +63,13 @@ export type Fact = {
   updated?: number;
 };
 
-export type UserMessage = { id: string; role: "user"; content: string };
+export type UserMessage = {
+  id: string;
+  role: "user";
+  content: string;
+  images?: string[]; // data URLs shown in the bubble (this session only)
+  imageCount?: number; // from saved history: images aren't stored, only how many
+};
 
 export type AssistantMessage = {
   id: string;
@@ -138,10 +144,11 @@ export type KnowledgeDoc = {
 export type SessionSummary = { id: string; title: string; created: number; updated: number; turns: number };
 
 export type TranscriptMessage =
-  | { role: "user"; content: string }
+  | { role: "user"; content: string; images?: number }
   | {
       role: "assistant";
       content: string;
+      stats?: RunStats | null;
       steps: (
         | { type: "thought"; text: string }
         | { type: "tool"; name: string; args: Record<string, unknown>; output: string | null; ok: boolean | null }

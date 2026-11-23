@@ -7,7 +7,7 @@ import { ArrowUp, FileText, Mic, Paperclip, Square, X } from "lucide-react";
 import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from "react";
 
 import { jelly } from "@/lib/motion";
-import { ACCEPT_ATTR, type Attachment } from "@/lib/useAttachments";
+import { ACCEPT_ATTR, type Attachment, type ImageAttachment } from "@/lib/useAttachments";
 import { useDictation } from "@/lib/voice";
 
 export type ComposerHandle = { fill: (text: string) => void; focus: () => void };
@@ -18,10 +18,12 @@ export const Composer = forwardRef<ComposerHandle, {
   onStop: () => void;
   autoSendVoice: boolean;
   attachments: Attachment[];
+  images: ImageAttachment[];
   indexing: boolean;
   onAttach: (files: File[]) => void;
   onRemoveAttachment: (id: number) => void;
-}>(function Composer({ busy, onSend, onStop, autoSendVoice, attachments, indexing, onAttach, onRemoveAttachment }, ref) {
+  onRemoveImage: (id: string) => void;
+}>(function Composer({ busy, onSend, onStop, autoSendVoice, attachments, images, indexing, onAttach, onRemoveAttachment, onRemoveImage }, ref) {
   const [text, setText] = useState("");
   const area = useRef<HTMLTextAreaElement>(null);
   const picker = useRef<HTMLInputElement>(null);
@@ -52,7 +54,7 @@ export const Composer = forwardRef<ComposerHandle, {
   }, [text]);
 
   function submit() {
-    if (busy || indexing || (!text.trim() && !attachments.length)) return;
+    if (busy || indexing || (!text.trim() && !attachments.length && !images.length)) return;
     onSend(text);
     setText("");
   }
@@ -74,11 +76,23 @@ export const Composer = forwardRef<ComposerHandle, {
         )}
       </AnimatePresence>
       <AnimatePresence initial={false}>
-        {attachments.length > 0 && (
+        {(attachments.length > 0 || images.length > 0) && (
           <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: "auto", opacity: 1 }}
             exit={{ height: 0, opacity: 0 }} transition={jelly} className="overflow-hidden">
             <div className="flex flex-wrap gap-1.5 px-1.5 pb-2 pt-1">
               <AnimatePresence>
+                {images.map((img) => (
+                  <motion.div key={img.id} layout initial={{ scale: 0.6, opacity: 0 }} animate={{ scale: 1, opacity: 1 }}
+                    exit={{ scale: 0.6, opacity: 0 }} transition={jelly}
+                    className="group relative size-14 overflow-hidden rounded-xl border border-white/15">
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img src={img.dataUrl} alt={img.name} className="size-full object-cover" />
+                    <button type="button" aria-label={`Remove ${img.name}`} onClick={() => onRemoveImage(img.id)}
+                      className="absolute right-0.5 top-0.5 grid size-5 place-items-center rounded-md bg-abyss-950/70 text-frost opacity-80 hover:opacity-100">
+                      <X className="size-3" />
+                    </button>
+                  </motion.div>
+                ))}
                 {attachments.map((a) => {
                   const working = ["queued", "reading", "embedding"].includes(a.status);
                   return (
@@ -151,6 +165,7 @@ export const Composer = forwardRef<ComposerHandle, {
             }
           }}
           placeholder={voice.listening ? "Listening…"
+            : images.length ? "Ask about the image, e.g. “save these classes to my timetable”…"
             : attachments.length ? (indexing ? "Reading your files… ask about them" : "Ask about the attached files…")
             : "Ask AETHER anything, or drop files here…"}
           aria-label="Message AETHER"
@@ -166,7 +181,7 @@ export const Composer = forwardRef<ComposerHandle, {
             </motion.button>
           ) : (
             <motion.button key="send" type="button" aria-label="Send" title="Send (Enter)" onClick={submit}
-              disabled={indexing || (!text.trim() && !attachments.length)}
+              disabled={indexing || (!text.trim() && !attachments.length && !images.length)}
               initial={{ scale: 0.6, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.6, opacity: 0 }}
               whileHover={{ scale: 1.08 }} whileTap={{ scale: 0.9 }} transition={jelly}
               className="grid size-10 shrink-0 place-items-center rounded-2xl bg-gradient-to-br from-sky to-periwinkle text-abyss-950 shadow-[0_6px_24px_rgba(56,189,248,0.4)] disabled:opacity-35 disabled:shadow-none">
