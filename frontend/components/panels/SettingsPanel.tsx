@@ -3,7 +3,7 @@
 /** Model switcher, system health, motion, voice and reminder settings. */
 import clsx from "clsx";
 import { motion } from "framer-motion";
-import { AudioLines, CalendarDays, Cloud, Cpu, Database, ExternalLink, KeyRound, Plug, RefreshCw, Trash2, Volume2 } from "lucide-react";
+import { AudioLines, CalendarDays, Cloud, Cpu, Database, ExternalLink, KeyRound, RefreshCw, Trash2, Volume2 } from "lucide-react";
 import { useState } from "react";
 
 import { api, ApiError } from "@/lib/api";
@@ -18,6 +18,7 @@ import { speechSupported } from "@/lib/voice";
 import { Chip, JiggleButton, Toggle } from "../ui";
 import { HardwareSection } from "./HardwareSection";
 import { HostsSection } from "./HostsSection";
+import { McpSection } from "./McpSection";
 import { ErrorNote, inputClass, PanelTitle } from "./shared";
 
 const ENGINE_LABEL: Record<string, string> = {
@@ -196,48 +197,6 @@ function CloudSection({ revision, onChanged, toast }: {
   );
 }
 
-function McpSection({ revision, toast }: { revision: number; toast: (t: string, b?: string) => void }) {
-  const mcp = useLive(api.mcp, revision, (d) => (d?.servers.some((s) => s.state === "starting") ? 1500 : 30_000));
-  const [reloading, setReloading] = useState(false);
-  const tone = { connected: "seafoam", error: "coral", disabled: "mist", starting: "glacier" } as const;
-  return (
-    <section>
-      <PanelTitle title="MCP servers" hint="External tools via the Model Context Protocol, from backend/mcp_servers.json."
-        action={<JiggleButton tone="ghost" className="px-2 py-1" aria-label="Reload MCP servers" disabled={reloading}
-          onClick={async () => {
-            setReloading(true);
-            try { await api.reloadMcp(); await mcp.reload(); toast("MCP servers reloaded"); }
-            catch (e) { toast(e instanceof ApiError ? e.message : "Reload failed"); }
-            finally { setReloading(false); }
-          }}>
-          <RefreshCw className={reloading ? "size-3.5 animate-spin" : "size-3.5"} />
-        </JiggleButton>} />
-      <div className="glass-inset space-y-2 rounded-2xl p-3">
-        {mcp.data && mcp.data.servers.length === 0 && (
-          <p className="text-xs leading-relaxed text-mist">
-            None yet. Copy <code className="font-mono text-glacier">mcp_servers.example.json</code> to{" "}
-            <code className="font-mono text-glacier">mcp_servers.json</code> in the backend folder (same format as
-            Claude Desktop), then reload.
-          </p>
-        )}
-        {mcp.data?.servers.map((s) => (
-          <div key={s.name} className="flex items-start gap-2.5">
-            <Plug className="mt-0.5 size-4 shrink-0 text-glacier" />
-            <div className="min-w-0 flex-1">
-              <div className="flex flex-wrap items-center gap-1.5">
-                <span className="text-sm text-frost">{s.name}</span>
-                <Chip tone={tone[s.state]}>{s.state}</Chip>
-                {s.state === "connected" && <Chip>{s.tools} tools</Chip>}
-                <Chip tone={s.approval === "never" ? "amber" : "mist"}>approval {s.approval}</Chip>
-              </div>
-              {s.error && <p className="mt-1 break-words text-[11px] text-coral">{s.error}</p>}
-            </div>
-          </div>
-        ))}
-      </div>
-    </section>
-  );
-}
 
 export function SettingsPanel({ health, onHealthChange, revision, toast }: {
   health: Health | null;

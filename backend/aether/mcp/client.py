@@ -1,6 +1,7 @@
-"""A small, dependency-free MCP (Model Context Protocol) client for stdio servers.
+"""A small MCP (Model Context Protocol) client: local servers (stdio) and remote ones (by URL).
 
 MCP stdio transport = newline-delimited JSON-RPC 2.0 over the server process's stdin/stdout.
+Remote servers use the Streamable HTTP transport (MCPHttpServer, below).
 This implements exactly what AETHER needs: initialize, tools/list (paginated), tools/call,
 and answering a server's `ping`.
 """
@@ -180,3 +181,125 @@ class MCPServer:
         if not parts and result.get("structuredContent") is not None:
             parts.append(json.dumps(result["structuredContent"], ensure_ascii=False))
         return (not result.get("isError", False)), "\n".join(parts) or "(no output)"
+
+
+class MCPHttpServer(MCPServer):
+    """An MCP server reached by URL (the "Streamable HTTP" transport): each JSON-RPC message is
+    a POST; the reply is JSON, or an event stream carrying it. Headers (e.g. an API token) are
+    sent with every request. Servers that need an OAuth sign-in in a browser aren't supported."""
+
+    def __init__(self, name: str, url: str, headers: dict[str, str] | None = None,
+                 request_timeout_s: float = 60.0, transport: Any = None):
+        super().__init__(name, command=url, request_timeout_s=request_timeout_s)
+        import httpx
+
+        self.url = url
+        self.headers = dict(headers or {})
+        self.session_id: str | None = None
+        self._open = False
+        self._http = httpx.AsyncClient(timeout=httpx.Timeout(request_timeout_s, connect=10.0),
+                                       transport=transport, follow_redirects=True)
+
+    @property
+    def running(self) -> bool:
+        return self._open
+
+    def _headers(self) -> dict[str, str]:
+        h = {"Content-Type": "application/json", "Accept": "application/json, text/event-stream",
+             **self.headers}
+        if self.session_id:
+            h["Mcp-Session-Id"] = self.session_id
+        if self.server_info or self._open:
+            h["MCP-Protocol-Version"] = PROTOCOL_VERSION
+        return h
+
+    async def start(self, timeout_s: float = 30.0) -> None:
+        self._open = True
+        try:
+            result = await self.request("initialize", {
+                "protocolVersion": PROTOCOL_VERSION, "capabilities": {},
+                "clientInfo": {"name": "aether", "version": "0.1.0"}}, timeout_s=timeout_s)
+        except Exception:
+            self._open = False
+            raise
+        self.server_info = result.get("serverInfo", {}) if isinstance(result, dict) else {}
+        await self.notify("notifications/initialized")
+
+    async def stop(self) -> None:
+        if self._open and self.session_id:
+            with contextlib.suppress(Exception):
+                await self._http.delete(self.url, headers=self._headers(), timeout=3)
+        self._open = False
+        await self._http.aclose()
+
+    async def _post(self, message: dict[str, Any], timeout_s: float) -> Any:
+        import httpx
+
+        try:
+            async with self._http.stream("POST", self.url, json=message, headers=self._headers(),
+                                         timeout=timeout_s) as r:
+                if r.status_code in (401, 403):
+                    raise MCPError(f"'{self.name}' refused access ({r.status_code}). If it needs a token, add it "
+                                   "as a header (e.g. Authorization: Bearer …). Sign-in-in-a-browser (OAuth) "
+                                   "servers aren't supported yet.")
+                if r.status_code == 404 and self.session_id and message.get("method") != "initialize":
+                    raise MCPError(f"'{self.name}' ended the session. Reload MCP servers to reconnect.")
+                if r.status_code >= 400:
+                    body = (await r.aread()).decode(errors="replace")[:200]
+                    raise MCPError(f"'{self.name}' answered HTTP {r.status_code}: {body}")
+                if sid := r.headers.get("mcp-session-id"):
+                    self.session_id = sid
+                if "id" not in message:  # a notification: 202 Accepted, nothing to read
+                    return None
+                ctype = r.headers.get("content-type", "")
+                if "text/event-stream" in ctype:
+                    async for line in r.aiter_lines():
+                        if not line.startswith("data:"):
+                            continue
+                        try:
+                            msg = json.loads(line[5:].strip())
+                        except json.JSONDecodeError:
+                            continue
+                        found = self._match(msg, message["id"])
+                        if found is not _NO:
+                            return found
+                    raise MCPError(f"'{self.name}' closed the stream without answering.")
+                payload = json.loads(await r.aread() or b"null")
+                found = self._match(payload, message["id"])
+                if found is _NO:
+                    raise MCPError(f"'{self.name}' sent an unexpected reply.")
+                return found
+        except httpx.HTTPError as e:
+            raise MCPError(f"Can't reach '{self.name}' at {self.url}: {type(e).__name__}") from e
+
+    @staticmethod
+    def _match(payload: Any, rid: int) -> Any:
+        for msg in payload if isinstance(payload, list) else [payload]:
+            if isinstance(msg, dict) and msg.get("id") == rid and ("result" in msg or "error" in msg):
+                if "error" in msg:
+                    err = msg["error"] or {}
+                    raise MCPError(f"{err.get('message', 'error')} (code {err.get('code')})")
+                return msg.get("result")
+        return _NO
+
+    async def request(self, method: str, params: dict[str, Any] | None = None,
+                      timeout_s: float | None = None) -> Any:
+        if not self._open:
+            raise MCPError(f"MCP server '{self.name}' isn't connected.")
+        msg: dict[str, Any] = {"jsonrpc": "2.0", "id": next(self._ids), "method": method}
+        if params is not None:
+            msg["params"] = params
+        try:
+            return await asyncio.wait_for(self._post(msg, timeout_s or self.request_timeout_s),
+                                          (timeout_s or self.request_timeout_s) + 5)
+        except asyncio.TimeoutError as e:
+            raise MCPError(f"MCP server '{self.name}' didn't answer {method} in time.") from e
+
+    async def notify(self, method: str, params: dict[str, Any] | None = None) -> None:
+        msg: dict[str, Any] = {"jsonrpc": "2.0", "method": method}
+        if params is not None:
+            msg["params"] = params
+        await self._post(msg, 10)
+
+
+_NO = object()

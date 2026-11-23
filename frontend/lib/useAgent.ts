@@ -10,6 +10,7 @@ import { useCallback, useEffect, useReducer, useRef } from "react";
 import { API_BASE, api, ApiError } from "./api";
 import { readSSE } from "./sse";
 import type {
+  Feedback,
   AgentEvent,
   AgentState,
   Approval,
@@ -38,7 +39,9 @@ type Action =
   | { type: "event"; event: AgentEvent }
   | { type: "end"; stopped?: boolean; error?: { message: string; hint?: string } }
   | { type: "load"; id: string; messages: Message[] }
-  | { type: "reset" };
+  | { type: "reset" }
+  | { type: "refresh" }
+  | { type: "feedback"; id: string; feedback: Feedback };
 
 const initial: State = { messages: [], sessionId: null, agentState: "idle", approval: null, busy: false, revision: 0 };
 
@@ -76,6 +79,11 @@ function reducer(state: State, action: Action): State {
       return { ...initial, revision: state.revision, sessionId: action.id, messages: action.messages };
     case "reset":
       return { ...initial, revision: state.revision + 1 };
+    case "refresh":  // e.g. the chat's title was just written in the background
+      return { ...state, revision: state.revision + 1 };
+    case "feedback":
+      return { ...state, messages: state.messages.map((m) => (m.id === action.id && m.role === "assistant"
+        ? { ...m, feedback: action.feedback } : m)) };
     case "end": {
       const messages = updateLast(state.messages, (m) =>
         m.status !== "streaming"
@@ -196,6 +204,7 @@ export function transcriptToMessages(transcript: TranscriptMessage[]): Message[]
       : {
           id: uid(), role: "assistant", content: t.content, draft: "", thinking: "", status: "done",
           stats: t.stats ?? undefined,
+          feedback: t.feedback,
           steps: t.steps.map((s): Step => s.type === "thought"
             ? { kind: "thought", text: s.text }
             : { kind: "tool", callId: uid(), name: s.name, args: s.args ?? {}, risk: "safe", icon: "",
@@ -270,7 +279,15 @@ export function useAgent(options?: { onAnswer?: (text: string) => void; onLearne
     }
     controller.current = null;
     dispatch({ type: "end", error });
+    // After the 1st and 3rd reply the backend names the chat in the background: refresh lists then.
+    const replies = stateRef.current.messages.filter((m) => m.role === "assistant").length;
+    if (!error && (replies === 1 || replies === 3)) {
+      window.setTimeout(() => dispatch({ type: "refresh" }), 2500);
+      window.setTimeout(() => dispatch({ type: "refresh" }), 8000);
+    }
   }, []);
+
+  const rate = useCallback((id: string, feedback: Feedback) => dispatch({ type: "feedback", id, feedback }), []);
 
   // `send` is stable, so it reads the live session id through a ref.
   const stateRef = useRef(state);
@@ -294,5 +311,5 @@ export function useAgent(options?: { onAnswer?: (text: string) => void; onLearne
     dispatch({ type: "reset" });
   }, []);
 
-  return { ...state, send, stop, decide, newChat, loadSession };
+  return { ...state, send, stop, decide, newChat, loadSession, rate };
 }

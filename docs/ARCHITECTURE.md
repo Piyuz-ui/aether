@@ -141,6 +141,7 @@ ai agent/
 │   │   ├── events.py              AgentEvent + event types
 │   │   ├── metrics.py             tokens, context window use, timing
 │   │   ├── workspace.py           path-jail for all file access
+│   │   ├── usage.py           cloud usage, prices and budget
 │   │   ├── hardware.py        live GPU / VRAM / RAM per machine + models loaded in GPU memory
 │   │   ├── llm/
 │   │   │   ├── ollama.py          async streaming client, model resolution, errors with hints
@@ -268,3 +269,8 @@ Clips are scheduled on the `AudioContext` clock (`start(at)`, where `at` is when
 ### Telemetry
 
 The final assistant message of each turn carries `meta.stats`: model, model calls, per-tool seconds, tokens in and out, context-window use, tokens per second and wall time. It's stored in the `messages.meta` column, which was added by an automatic migration, so the chip still appears on reopened chats. `Session.history()` strips `meta` (and images) before anything is sent back to the model.
+
+
+## AETHER as an MCP server
+
+`backend/mcp_server.py` speaks MCP over stdio and offers AETHER's study tools (knowledge base, memory, tasks, timetable, notes, PDFs) to any MCP client. Settings can register it with Claude Desktop or Claude Code in one click. The client side (`aether/mcp/client.py`) connects to local stdio servers and to remote Streamable HTTP servers.

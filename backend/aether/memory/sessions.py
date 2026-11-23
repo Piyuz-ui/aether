@@ -26,7 +26,7 @@ class PersistentSession(Session):
         if first:
             user = next((m["content"] for m in messages if m["role"] == "user"), "")
             if user:
-                self.store.rename_session(self.id, _title_from(user))
+                self.store.rename_session(self.id, _title_from(user), source="first")
 
     def clear(self) -> None:
         super().clear()

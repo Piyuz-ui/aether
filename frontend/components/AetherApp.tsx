@@ -26,6 +26,7 @@ import { ArtifactPreview } from "./ArtifactPreview";
 import { Composer, type ComposerHandle } from "./Composer";
 import { Drawer, type DrawerTab } from "./Drawer";
 import { MessageView, spokenText } from "./MessageView";
+import { FeedbackContext } from "./Feedback";
 import { ModelSwitcher } from "./ModelSwitcher";
 import { UsagePanel } from "./panels/UsagePanel";
 import { LandingContext, SendGhost, type Flight, type Rect } from "./SendFlight";
@@ -193,6 +194,20 @@ export function AetherApp() {
     void agent.send(goal, images, { userId });
   }
 
+  // Each reply's place in the chat (0 = first), and "ask again" for the 👎 under it.
+  const replyIndex = new Map<string, number>();
+  agent.messages.filter((m) => m.role === "assistant").forEach((m, i) => replyIndex.set(m.id, i));
+  const feedbackCtx = {
+    sessionId: agent.sessionId,
+    rate: agent.rate,
+    retry: (turn: number) => {
+      if (agent.busy) return;
+      const at = agent.messages.findIndex((m) => replyIndex.get(m.id) === turn && m.role === "assistant");
+      const question = [...agent.messages.slice(0, at)].reverse().find((m) => m.role === "user");
+      if (question && question.role === "user" && question.content.trim()) void agent.send(question.content);
+    },
+  };
+
   useReminders(prefs.notifications, agent.revision, (t, b) => toast(t, b));
   const wakeArmed = useWakeWord(prefs.wakeWord, agent.busy, (text) => void agent.send(text));
 
@@ -317,7 +332,9 @@ export function AetherApp() {
             ) : (
               <LandingContext.Provider value={flight?.id ?? null}>
                 <div className="mx-auto flex max-w-3xl flex-col gap-6 px-4 py-8 sm:px-6">
-                  {agent.messages.map((m) => <MessageView key={m.id} message={m} />)}
+                  <FeedbackContext.Provider value={feedbackCtx}>
+                    {agent.messages.map((m) => <MessageView key={m.id} message={m} turn={replyIndex.get(m.id) ?? 0} />)}
+                  </FeedbackContext.Provider>
                 </div>
               </LandingContext.Provider>
             )}
@@ -344,7 +361,7 @@ export function AetherApp() {
           {tab === "chats" && (
             <ChatsPanel revision={agent.revision} currentId={agent.sessionId}
               onOpen={(id) => void agent.loadSession(id)}
-              onDeleted={(id) => id === agent.sessionId && agent.newChat()} />
+              onDeleted={(id) => id === agent.sessionId && agent.newChat()} toast={toast} />
           )}
           {tab === "usage" && <UsagePanel revision={agent.revision} />}
           {tab === "settings" && (

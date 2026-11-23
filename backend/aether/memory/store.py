@@ -153,6 +153,19 @@ class Store:
         cols = {r[1] for r in self.conn.execute("PRAGMA table_info(messages)").fetchall()}
         if "meta" not in cols:
             self.conn.execute("ALTER TABLE messages ADD COLUMN meta TEXT")
+        # Where a chat's title came from: "first" (start of the first message), "ai" or "user".
+        cols = {r[1] for r in self.conn.execute("PRAGMA table_info(sessions)").fetchall()}
+        if "title_source" not in cols:
+            self.conn.execute("ALTER TABLE sessions ADD COLUMN title_source TEXT NOT NULL DEFAULT 'first'")
+        # 👍 / 👎 on a reply (`turn` = the reply's index in the chat, from 0).
+        self.conn.execute("""CREATE TABLE IF NOT EXISTS feedback (
+            session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+            turn INTEGER NOT NULL,
+            rating TEXT NOT NULL CHECK (rating IN ('good', 'bad')),
+            reason TEXT NOT NULL DEFAULT '',
+            model TEXT NOT NULL DEFAULT '',
+            ts REAL NOT NULL,
+            PRIMARY KEY (session_id, turn))""")
 
     def _load_sqlite_vec(self) -> bool:
         try:
@@ -230,17 +243,28 @@ class Store:
     # ------------------------------------------------------------- sessions
     def create_session(self, session_id: str, title: str = "New chat") -> None:
         now = time.time()
-        self.execute("INSERT OR IGNORE INTO sessions VALUES (?, ?, ?, ?)",
+        self.execute("INSERT OR IGNORE INTO sessions (id, title, created, updated) VALUES (?, ?, ?, ?)",
                      (session_id, title, now, now))
 
     def list_sessions(self, limit: int = 50) -> list[dict[str, Any]]:
         return self.query(
-            "SELECT s.*, (SELECT COUNT(DISTINCT turn) FROM messages m WHERE m.session_id = s.id)"
-            " AS turns FROM sessions s ORDER BY updated DESC LIMIT ?", (limit,))
+            "SELECT s.*, (SELECT COUNT(DISTINCT turn) FROM messages m WHERE m.session_id = s.id) AS turns,"
+            " (SELECT SUM(rating = 'good') FROM feedback f WHERE f.session_id = s.id) AS good,"
+            " (SELECT SUM(rating = 'bad') FROM feedback f WHERE f.session_id = s.id) AS bad"
+            " FROM sessions s ORDER BY updated DESC LIMIT ?", (limit,))
 
-    def rename_session(self, session_id: str, title: str) -> bool:
-        return self.execute("UPDATE sessions SET title = ? WHERE id = ?",
-                            (title, session_id)).rowcount > 0
+    def rename_session(self, session_id: str, title: str, source: str = "user") -> bool:
+        return self.execute("UPDATE sessions SET title = ?, title_source = ? WHERE id = ?",
+                            (title, source, session_id)).rowcount > 0
+
+    def set_feedback(self, session_id: str, turn: int, rating: str, reason: str = "", model: str = "") -> None:
+        self.execute("INSERT INTO feedback (session_id, turn, rating, reason, model, ts) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(session_id, turn) DO UPDATE SET "
+                     "rating = excluded.rating, reason = excluded.reason, model = excluded.model, ts = excluded.ts",
+                     (session_id, turn, rating, reason, model, time.time()))
+
+    def feedback(self, session_id: str) -> dict[int, dict[str, Any]]:
+        return {r["turn"]: {"rating": r["rating"], "reason": r["reason"]}
+                for r in self.query("SELECT * FROM feedback WHERE session_id = ?", (session_id,))}
 
     def delete_session(self, session_id: str) -> bool:
         return self.execute("DELETE FROM sessions WHERE id = ?", (session_id,)).rowcount > 0

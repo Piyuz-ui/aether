@@ -12,7 +12,7 @@
 ![Ollama](https://img.shields.io/badge/LLM-Ollama%20(local)-7DD3FC)
 ![MCP](https://img.shields.io/badge/MCP-client-A5B4FC)
 ![Voice](https://img.shields.io/badge/Voice-Kokoro--82M-5EEAD4)
-![Tests](https://img.shields.io/badge/tests-229%20passing-5EEAD4)
+![Tests](https://img.shields.io/badge/tests-249%20passing-5EEAD4)
 ![Privacy](https://img.shields.io/badge/data-local%20by%20default-0E2442)
 [![License: MIT](https://img.shields.io/badge/license-MIT-F0F9FF)](LICENSE)
 
@@ -198,6 +198,22 @@ Local models are always the default. To add a cloud model, open **Settings → C
 Connected providers appear in the header's model menu, under the local models. Each provider's live model list is used when it can be fetched. While a cloud model is selected, your messages go to that provider, along with any memories and document passages AETHER adds to the prompt. Embeddings, the knowledge vault, memory storage and voice never leave your machine. **Track what it costs.** The **Usage** tab records every cloud request. It shows this month's and today's spend, an optional monthly budget (amber at 80%, red when reached), a 14-day chart, and, per model, its requests, tokens in/out/cached, how full its context got and its cost. Free tiers also show the allowance they report as left (e.g. Groq's requests and tokens). Claude's prices are built in and free tiers count as $0. Prices that change often (OpenAI, DeepSeek, Grok, Hugging Face) aren't guessed: you enter them once, and they apply to past usage too. Each reply's stats chip shows what that answer cost.
 
 Every provider except Claude is used through its OpenAI-compatible API, and only models that can call tools are listed. Claude uses the official Anthropic SDK with refusal fallbacks turned on. AETHER adapts to each provider's quirks on its own. For example, it learns which settings a model refuses and stops sending them, and it uses the tool-call id format Mistral requires.
+</details>
+
+<details>
+<summary><b>Chats: names and feedback</b></summary>
+
+AETHER names each chat by its topic. It does this after the first reply, then again after the third, when the topic is clearer. It runs in the background, so you can keep typing. In **Chats**, ✏️ renames a chat (your name is never overwritten) and ✨ asks AETHER to name it again. The first three replies of every chat ask *How's this going?* 👍/👎. A 👎 lets you tap a reason and **Ask again**, and the Chats list marks chats that went badly.
+</details>
+
+<details>
+<summary><b>MCP: more tools, and AETHER inside Claude</b></summary>
+
+**Settings → MCP servers** adds, edits, switches off or removes servers. A server can be a **local command** (stdio) or a **remote URL** (Streamable HTTP; a token goes in a header). Tokens are never shown back in the app. Servers that need a browser sign-in (OAuth) aren't supported yet.
+
+**Claude ⇄ AETHER:**
+- **Let Claude use AETHER:** one click adds AETHER as an MCP server to **Claude Desktop** (its config is edited, with a backup) or **Claude Code** (`claude mcp add --scope user`). Claude then gets AETHER's tools for your documents, memory, tasks, timetable and notes ([`backend/mcp_server.py`](backend/mcp_server.py)). It never gets tools that run code or delete files.
+- **Import from Claude:** servers set up in Claude Desktop or Claude Code show up in a list to bring into AETHER. Imported ones ask before every call.
 </details>
 
 <details>

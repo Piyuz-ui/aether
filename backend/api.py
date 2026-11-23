@@ -128,12 +128,38 @@ class BudgetIn(BaseModel):
     monthly_usd: float | None = Field(default=None, ge=0, le=100_000)
 
 
+class MCPServerIn(BaseModel):
+    command: str | None = Field(default=None, max_length=500)    # a local server…
+    args: list[str] = Field(default_factory=list, max_length=60)
+    env: dict[str, str] = Field(default_factory=dict)
+    url: str | None = Field(default=None, max_length=500)        # …or a remote one
+    headers: dict[str, str] = Field(default_factory=dict)
+    approval: Literal["auto", "always", "never"] = "auto"
+    include: list[str] = Field(default_factory=list)
+    disabled: bool = False
+
+
+class ClaudeImport(BaseModel):
+    items: list[dict[str, str]] = Field(min_length=1, max_length=50)   # [{source, name}]
+
+
+class ClaudeTarget(BaseModel):
+    target: Literal["desktop", "code"]
+
+
 class KeyIn(BaseModel):
     key: str = Field(min_length=8, max_length=400, pattern=r"^[\x21-\x7e]+$")  # no spaces/newlines
 
 
 class SessionPatch(BaseModel):
     title: str = Field(min_length=1, max_length=120)
+
+
+class FeedbackIn(BaseModel):
+    turn: int = Field(ge=0, le=10_000)            # the reply's index in the chat, from 0
+    rating: Literal["good", "bad"]
+    reason: str = Field(default="", max_length=300)
+    model: str = Field(default="", max_length=200)
 
 
 class FactIn(BaseModel):
@@ -490,6 +516,86 @@ def create_app(settings: Settings | None = None, *, llm: Any = None,
         await ctx.mcp.reload()
         return {"servers": ctx.mcp.summary()}
 
+    # ------------------------------------------------------- MCP setup
+    def mcp_cfg(request: Request) -> Any:
+        from aether.mcp.config import ServerConfig
+        return ServerConfig(ctx_of(request).settings.mcp_config)
+
+    def claude_paths_of(request: Request) -> Any:
+        from aether.mcp.config import claude_paths
+        return getattr(request.app.state, "claude_paths", None) or claude_paths()
+
+    @app.get("/api/mcp/config")
+    async def mcp_config(request: Request) -> dict[str, Any]:
+        """Configured servers (secrets masked) with their live status."""
+        from aether.mcp.config import masked
+        ctx = ctx_of(request)
+        status = {s["name"]: s for s in ctx.mcp.summary()}
+        servers = [{"name": n, "config": masked(c), "status": status.get(n)}
+                   for n, c in mcp_cfg(request).servers().items()]
+        return {"path": str(ctx.settings.mcp_config), "servers": servers}
+
+    @app.put("/api/mcp/servers/{name}")
+    async def save_mcp_server(name: str, body: MCPServerIn, request: Request) -> dict[str, Any]:
+        """Add or change a server in mcp_servers.json, then restart MCP so it takes effect."""
+        ctx = ctx_of(request)
+        try:
+            mcp_cfg(request).save(name, body.model_dump())
+        except ValueError as e:
+            raise HTTPException(422, detail={"message": str(e)}) from e
+        await ctx.mcp.reload()
+        return next((s for s in ctx.mcp.summary() if s["name"] == name), {"name": name, "state": "unknown"})
+
+    @app.delete("/api/mcp/servers/{name}")
+    async def delete_mcp_server(name: str, request: Request) -> dict[str, Any]:
+        ctx = ctx_of(request)
+        if not mcp_cfg(request).remove(name):
+            raise HTTPException(404, detail={"message": f"No MCP server named '{name}'."})
+        await ctx.mcp.reload()
+        return {"removed": name}
+
+    @app.get("/api/mcp/claude")
+    async def mcp_claude(request: Request) -> dict[str, Any]:
+        """Servers set up in Claude Desktop / Claude Code (to import), and whether AETHER is in Claude."""
+        from aether.mcp.config import aether_in_claude, find_claude_servers
+        paths = claude_paths_of(request)
+        mine = mcp_cfg(request).servers()
+        mine_cmds = {(c.get("url") or c.get("command")) for c in mine.values()}
+        found = [{k: v for k, v in e.items() if k != "config"} | {
+                    "added": e["name"] in mine or (e["config"].get("url") or e["config"].get("command")) in mine_cmds}
+                 for e in find_claude_servers(paths)]
+        return {"found": found, "aether": aether_in_claude(paths)}
+
+    @app.post("/api/mcp/claude/import")
+    async def mcp_claude_import(body: ClaudeImport, request: Request) -> dict[str, Any]:
+        from aether.mcp.config import import_claude_servers
+        added = import_claude_servers(mcp_cfg(request), body.items, claude_paths_of(request))
+        if added:
+            await ctx_of(request).mcp.reload()
+        return {"added": added}
+
+    @app.post("/api/mcp/claude/connect")
+    async def mcp_claude_connect(body: ClaudeTarget, request: Request) -> dict[str, Any]:
+        """Add AETHER to Claude Desktop (edits its config; a backup is kept) or Claude Code
+        (runs `claude mcp add --scope user`)."""
+        from aether.mcp.config import connect_claude
+        try:
+            note = connect_claude(body.target, True, claude_paths_of(request),
+                                  getattr(request.app.state, "claude_runner", None) or __import__("subprocess").run)
+        except (FileNotFoundError, RuntimeError, OSError) as e:
+            raise HTTPException(422, detail={"message": str(e)}) from e
+        return {"target": body.target, "connected": True, "next": note}
+
+    @app.post("/api/mcp/claude/disconnect")
+    async def mcp_claude_disconnect(body: ClaudeTarget, request: Request) -> dict[str, Any]:
+        from aether.mcp.config import connect_claude
+        try:
+            note = connect_claude(body.target, False, claude_paths_of(request),
+                                  getattr(request.app.state, "claude_runner", None) or __import__("subprocess").run)
+        except (FileNotFoundError, RuntimeError, OSError) as e:
+            raise HTTPException(422, detail={"message": str(e)}) from e
+        return {"target": body.target, "connected": False, "next": note}
+
     @app.get("/api/tools")
     async def tools() -> list[dict[str, Any]]:
         return [{"name": t.name, "description": t.description, "category": t.category,
@@ -497,6 +603,25 @@ def create_app(settings: Settings | None = None, *, llm: Any = None,
                 for t in REGISTRY.all()]
 
     # -------------------------------------------------------------- chat
+    async def auto_title(ctx: AppContext, session_id: str, *, force: bool = False) -> str | None:
+        """Let the model name a chat. Never replaces a title you typed (unless forced)."""
+        from aether.memory.titles import generate_title
+        store = ctx.memory.store
+        row = store.one("SELECT title_source FROM sessions WHERE id = ?", (session_id,))
+        if not row or (row["title_source"] == "user" and not force):
+            return None
+        turns = store.load_turns(session_id)
+        if not turns:
+            return None
+        try:
+            model = await ctx.agent.ensure_model()
+            title = await asyncio.wait_for(generate_title(ctx.llm, model, turns), timeout=20)
+        except Exception:
+            return None  # a title is a nicety: never let it break anything
+        if title:
+            store.rename_session(session_id, title, source="ai")
+        return title
+
     @app.post("/api/chat")
     async def chat(body: ChatRequest, request: Request) -> EventSourceResponse:
         ctx = ctx_of(request)
@@ -511,11 +636,18 @@ def create_app(settings: Settings | None = None, *, llm: Any = None,
             try:
                 yield {"event": "session", "id": "0",
                        "data": json.dumps({"session_id": session.id})}
+                finished = False
                 async with contextlib.aclosing(ctx.agent.run(body.message, session,
                                                              images=body.images or None)) as events:
                     async for event in events:
                         seq += 1
+                        finished = finished or event.type.value == "done"
                         yield {"event": event.type.value, "id": str(seq), "data": event.to_json()}
+                # Name the chat after its 1st reply, and again after the 3rd (the topic is clearer
+                # by then), unless you've named it yourself. In the background, so the reply ends
+                # now and you can keep typing; the app picks the title up a moment later.
+                if finished and len(session.turns) in (1, 3):
+                    ctx.spawn(auto_title(ctx, session.id))
             finally:
                 # Also runs when the browser disconnects: the agent run is closed and any
                 # pending approval is denied by the engine's own cleanup.
@@ -545,7 +677,33 @@ def create_app(settings: Settings | None = None, *, llm: Any = None,
         meta = store.one("SELECT * FROM sessions WHERE id = ?", (session_id,))
         if not meta:
             raise HTTPException(404, detail={"message": "No such chat."})
-        return {**meta, "messages": transcript(store.load_turns(session_id))}
+        messages = transcript(store.load_turns(session_id))
+        ratings = store.feedback(session_id)
+        replies = [m for m in messages if m["role"] == "assistant"]
+        for i, m in enumerate(replies):
+            if i in ratings:
+                m["feedback"] = ratings[i]
+        return {**meta, "messages": messages}
+
+    @app.post("/api/sessions/{session_id}/title")
+    async def retitle(session_id: str, request: Request) -> dict[str, Any]:
+        """Have the model name this chat now (the ✨ button), even if you renamed it before."""
+        ctx = ctx_of(request)
+        if not ctx.memory.store.one("SELECT id FROM sessions WHERE id = ?", (session_id,)):
+            raise HTTPException(404, detail={"message": "No such chat."})
+        title = await auto_title(ctx, session_id, force=True)
+        if not title:
+            raise HTTPException(503, detail={"message": "Couldn't come up with a title right now.",
+                                             "hint": "Check that a model is running, or type a name yourself."})
+        return {"id": session_id, "title": title}
+
+    @app.post("/api/sessions/{session_id}/feedback")
+    async def feedback(session_id: str, body: FeedbackIn, request: Request) -> dict[str, Any]:
+        store = ctx_of(request).memory.store
+        if not store.one("SELECT id FROM sessions WHERE id = ?", (session_id,)):
+            raise HTTPException(404, detail={"message": "No such chat."})
+        store.set_feedback(session_id, body.turn, body.rating, body.reason.strip(), body.model)
+        return {"session_id": session_id, "turn": body.turn, "rating": body.rating}
 
     @app.patch("/api/sessions/{session_id}")
     async def rename(session_id: str, body: SessionPatch, request: Request) -> dict[str, Any]:

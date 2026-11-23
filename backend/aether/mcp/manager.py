@@ -6,7 +6,9 @@ Config (same shape as Claude Desktop's, plus two optional AETHER keys):
         "filesystem": {"command": "npx", "args": ["-y", "@modelcontextprotocol/server-filesystem", "./workspace"],
                        "approval": "auto",          # auto | always | never   (default: auto)
                        "include": ["read_file"],    # optional allow-list of tool names
-                       "disabled": false}}}
+                       "disabled": false},
+        "docs": {"url": "https://example.com/mcp",          # a remote server (Streamable HTTP)
+                 "headers": {"Authorization": "Bearer …"}}}}
 
 approval: "auto" runs tools the server marks read-only (readOnlyHint) freely and asks before
 anything else; "always" asks before every call; "never" trusts the server completely.
@@ -20,7 +22,7 @@ from pathlib import Path
 from typing import Any
 
 from ..tools.registry import REGISTRY, Risk, ToolError, ToolRegistry, ToolSpec
-from .client import MCPError, MCPServer
+from .client import MCPError, MCPHttpServer, MCPServer
 
 SEP = "__"
 
@@ -46,6 +48,7 @@ class MCPManager:
         self.servers: dict[str, MCPServer] = {}
         self.status: dict[str, dict[str, Any]] = {}
         self._registered: list[str] = []
+        self.http_transport: Any = None  # tests inject a fake remote server
 
     def load_config(self) -> dict[str, dict[str, Any]]:
         if not self.config_path.exists():
@@ -65,18 +68,24 @@ class MCPManager:
         await asyncio.gather(*(self._start(name, cfg, timeout_s) for name, cfg in config.items()))
 
     async def _start(self, name: str, cfg: dict[str, Any], timeout_s: float) -> None:
-        base = {"name": name, "command": cfg.get("command", ""), "tools": 0, "error": None,
-                "approval": cfg.get("approval", "auto")}
+        url = cfg.get("url")
+        base = {"name": name, "command": cfg.get("command") or url or "", "tools": 0, "error": None,
+                "approval": cfg.get("approval", "auto"), "kind": "remote" if url else "local"}
         if cfg.get("disabled"):
             self.status[name] = {**base, "state": "disabled"}
             return
-        if not cfg.get("command"):
-            self.status[name] = {**base, "state": "error", "error": "No `command` given (only stdio servers are supported)."}
+        if not cfg.get("command") and not url:
+            self.status[name] = {**base, "state": "error",
+                                 "error": "Give a `command` (a local server) or a `url` (a remote one)."}
             return
         self.status[name] = {**base, "state": "starting"}
         cwd = cfg.get("cwd")
-        server = MCPServer(name, cfg["command"], cfg.get("args"), cfg.get("env"),
-                           str((self.base_dir / cwd).resolve()) if cwd else str(self.base_dir))
+        server: MCPServer
+        if url:
+            server = MCPHttpServer(name, url, cfg.get("headers"), transport=self.http_transport)
+        else:
+            server = MCPServer(name, cfg["command"], cfg.get("args"), cfg.get("env"),
+                               str((self.base_dir / cwd).resolve()) if cwd else str(self.base_dir))
         try:
             await asyncio.wait_for(server.start(timeout_s=timeout_s), timeout_s + 5)
             tools = await server.list_tools()

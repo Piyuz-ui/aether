@@ -86,6 +86,8 @@ export type AssistantMessage = {
   stats?: RunStats;
   error?: { message: string; hint?: string };
   learned?: Fact[];
+  /** Your 👍/👎 on this reply. */
+  feedback?: Feedback;
 };
 
 export type Message = UserMessage | AssistantMessage;
@@ -186,7 +188,13 @@ export type KnowledgeDoc = {
   duplicate?: boolean;
 };
 
-export type SessionSummary = { id: string; title: string; created: number; updated: number; turns: number };
+export type SessionSummary = {
+  id: string; title: string; created: number; updated: number; turns: number;
+  /** Where the title came from: the first message, the model ("ai") or you ("user"). */
+  title_source?: "first" | "ai" | "user";
+  good?: number | null; bad?: number | null;
+};
+export type Feedback = { rating: "good" | "bad"; reason?: string };
 
 export type TranscriptMessage =
   | { role: "user"; content: string; images?: number }
@@ -194,6 +202,7 @@ export type TranscriptMessage =
       role: "assistant";
       content: string;
       stats?: RunStats | null;
+      feedback?: Feedback;
       steps: (
         | { type: "thought"; text: string }
         | { type: "tool"; name: string; args: Record<string, unknown>; output: string | null; ok: boolean | null }
@@ -297,4 +306,25 @@ export type UsageSummary = {
   by_model: ModelUsage[];
   daily: { date: string; cost_usd: number; tokens: number; requests: number }[];
   limits: { provider: string; label: string; at: number; windows: Record<string, RateWindow> }[];
+};
+
+export type McpServerConfig = {
+  command?: string; args?: string[]; env?: Record<string, string>;
+  url?: string; headers?: Record<string, string>;
+  approval?: "auto" | "always" | "never"; include?: string[]; disabled?: boolean;
+};
+export type McpServerEntry = {
+  name: string;
+  config: McpServerConfig;
+  status: { state: "starting" | "connected" | "error" | "disabled"; tools: number; error: string | null; server?: string; kind?: "local" | "remote" } | null;
+};
+export type ClaudeServer = { name: string; source: string; kind: "local" | "remote"; command: string; supported: boolean; note: string | null; added: boolean };
+export type ClaudeStatus = {
+  found: ClaudeServer[];
+  aether: {
+    desktop: { connected: boolean; installed: boolean; path: string };
+    code: { connected: boolean; installed: boolean };
+    command: string;
+    code_command: string;
+  };
 };

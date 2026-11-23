@@ -16,6 +16,7 @@ import type { AssistantMessage, Message } from "@/lib/types";
 
 import { QuizDeck } from "./QuizDeck";
 import { useLandingId } from "./SendFlight";
+import { FeedbackRow } from "./Feedback";
 import { GpuLive } from "./GpuLive";
 import { TelemetryChip } from "./Telemetry";
 import { ThoughtLine, ToolPill } from "./ToolPill";
@@ -116,7 +117,7 @@ function FileChips({ files }: { files: string[] }) {
   );
 }
 
-function AssistantBubble({ m }: { m: AssistantMessage }) {
+function AssistantBubble({ m, turn }: { m: AssistantMessage; turn: number }) {
   const streaming = m.status === "streaming";
   const quizzes = quizIds(m);
   // Small models often repeat the quiz as text even though the cards show it: keep it short.
@@ -151,6 +152,7 @@ function AssistantBubble({ m }: { m: AssistantMessage }) {
         </motion.div>
       )}
       {quizzes.map((id) => <QuizDeck key={id} quizId={id} />)}
+      <FeedbackRow m={m} turn={turn} />
       <FileChips files={createdFiles(m)} />
       {m.status === "error" && m.error && (
         <div className="rounded-3xl border border-coral/30 bg-coral/[0.08] px-5 py-4 text-sm">
@@ -171,7 +173,8 @@ function AssistantBubble({ m }: { m: AssistantMessage }) {
   );
 }
 
-export function MessageView({ message }: { message: Message }) {
+/** `turn`: for a reply, its index among the chat's replies (0 = first). */
+export function MessageView({ message, turn = 0 }: { message: Message; turn?: number }) {
   const landing = useLandingId();
   return (
     <motion.div variants={popIn} initial={landing === message.id ? "show" : "hidden"} animate="show" layout="position"
@@ -197,7 +200,7 @@ export function MessageView({ message }: { message: Message }) {
         </div>
         </div>
       ) : (
-        <div className="w-full max-w-[92%]"><AssistantBubble m={message} /></div>
+        <div className="w-full max-w-[92%]"><AssistantBubble m={message} turn={turn} /></div>
       )}
     </motion.div>
   );

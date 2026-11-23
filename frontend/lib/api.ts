@@ -14,6 +14,9 @@ import type {
   Fact,
   Health,
   KnowledgeDoc,
+  ClaudeStatus,
+  McpServerConfig,
+  McpServerEntry,
   SessionSummary,
   Task,
   ToolInfo,
@@ -91,6 +94,9 @@ export const api = {
     request<SessionSummary & { messages: TranscriptMessage[] }>(`/api/sessions/${id}`),
   renameSession: (id: string, title: string) => request(`/api/sessions/${id}`, json("PATCH", { title })),
   deleteSession: (id: string) => request(`/api/sessions/${id}`, { method: "DELETE" }),
+  retitleSession: (id: string) => request<{ id: string; title: string }>(`/api/sessions/${id}/title`, { method: "POST" }),
+  feedback: (id: string, turn: number, rating: "good" | "bad", reason = "", model = "") =>
+    request(`/api/sessions/${id}/feedback`, json("POST", { turn, rating, reason, model })),
 
   facts: () => request<Fact[]>("/api/memory/facts"),
   addFact: (text: string, category: Fact["category"]) =>
@@ -123,6 +129,13 @@ export const api = {
   quizStats: () => request<{ topic: string; correct: number; wrong: number; accuracy: number; weak: boolean }[]>("/api/quiz-stats"),
   mcp: () => request<{ config: string; exists: boolean; servers: McpServer[] }>("/api/mcp"),
   reloadMcp: () => request<{ servers: McpServer[] }>("/api/mcp/reload", { method: "POST" }),
+  mcpConfig: () => request<{ path: string; servers: McpServerEntry[] }>("/api/mcp/config"),
+  saveMcpServer: (name: string, cfg: McpServerConfig) => request<McpServer>(`/api/mcp/servers/${encodeURIComponent(name)}`, json("PUT", cfg)),
+  deleteMcpServer: (name: string) => request(`/api/mcp/servers/${encodeURIComponent(name)}`, json("DELETE")),
+  mcpClaude: () => request<ClaudeStatus>("/api/mcp/claude"),
+  importClaude: (items: { source: string; name: string }[]) => request<{ added: string[] }>("/api/mcp/claude/import", json("POST", { items })),
+  connectClaude: (target: "desktop" | "code", on: boolean) =>
+    request<{ next: string }>(`/api/mcp/claude/${on ? "connect" : "disconnect"}`, json("POST", { target })),
   calendarUrl: () => `${API_BASE}/api/calendar.ics`,
   fileUrl: (path: string, download = false) =>
     `${API_BASE}/api/files/${path.split("/").map(encodeURIComponent).join("/")}${download ? "?download=true" : ""}`,
