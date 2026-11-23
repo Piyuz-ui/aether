@@ -5,7 +5,7 @@ import json
 from datetime import date, datetime, timedelta
 from typing import Callable
 
-from .config import DOCS_DIR, WORKSPACE_DIR, Settings
+from .config import DOCS_DIR, ROOT, WORKSPACE_DIR, Settings
 from .llm import OllamaClient, OllamaError, strip_thinking
 from .memory import Memory
 from .tools import CONTEXT, REGISTRY, coerce_args
@@ -37,6 +37,9 @@ How to work:
 - "My notes", "my PDF", "my slides" usually mean files in the documents folder: use search_documents /
   read_document. search_notes only covers short notes saved with save_note.
 - If a tool says the user declined, accept it and suggest an alternative.
+- Never use run_command to start yourself (main.py, your CLI/web/voice modes) or any long-running
+  server; it would block for 120 s. Instead tell the user the exact command to run in a new terminal
+  tab. Your own web UI starts with: cd "{project}" && source .venv/bin/activate && python main.py web
 - Be concise and friendly. Use Markdown for lists and code.
 {memories}"""
 
@@ -90,7 +93,7 @@ class Agent:
             user_line=f" You work for {s.user_name}." if s.user_name else "",
             now=datetime.now().strftime("%A %d %B %Y, %H:%M"),
             calendar=_calendar(),
-            docs=DOCS_DIR, workspace=WORKSPACE_DIR, memories=memories)}
+            docs=DOCS_DIR, workspace=WORKSPACE_DIR, project=ROOT, memories=memories)}
 
     def _run_tool(self, name: str, raw_args) -> str:
         t = REGISTRY.get(name)

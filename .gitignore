@@ -9,3 +9,7 @@ workspace/*
 !workspace/.gitkeep
 .pytest_cache/
 .DS_Store
+
+# Local tool links created by Streamlit (point into .venv)
+.agents/
+.claude/
