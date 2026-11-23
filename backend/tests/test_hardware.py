@@ -49,6 +49,24 @@ def monitor(stats: dict[str, Any] | None) -> httpx.MockTransport:
     return httpx.MockTransport(handle)
 
 
+async def fast_link(host: str, port: int) -> dict[str, Any]:
+    return {**hardware.rate_link([4.8, 4.9, 5.1, 4.7], 4), "samples": 4}
+
+
+async def dead_link(host: str, port: int) -> dict[str, Any]:
+    return {**hardware.rate_link([], 4), "samples": 4}
+
+
+@pytest.fixture(autouse=True)
+def no_network(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Never probe real ports or read the real Wi-Fi in tests."""
+    monkeypatch.setattr(hardware, "mac_network", lambda: {"type": "Wi-Fi", "signal_dbm": -62, "quality": "good"})
+
+    async def closed(host: str, port: int, timeout: float = 1.0) -> bool:
+        return False
+    monkeypatch.setattr(hardware, "port_open", closed)
+
+
 @pytest.fixture(autouse=True)
 def fake_mac(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(hardware, "this_machine", lambda: {
@@ -75,7 +93,7 @@ async def test_snapshot_shows_the_mac_and_the_pc_with_loaded_models() -> None:
               {"name": "gpt-oss:20b", "size": 16 * GB, "size_vram": 12 * GB}]
     router = ModelRouter(OllamaClient("http://mac.test", transport=ollama([])),
                          hosts={"pc": "http://192.168.1.9:11434"}, host_transport=ollama(loaded))
-    mac, pc = await hardware.snapshot(router, monitor_transport=monitor(PC_STATS))
+    mac, pc = await hardware.snapshot(router, monitor_transport=monitor(PC_STATS), prober=fast_link)
     assert mac["label"] == "This Mac" and mac["system"]["cpu"] == "Apple M5 Pro" and mac["loaded"] == []
     assert pc["id"] == "pc" and pc["online"] and pc["monitor"] == "ok"
     assert pc["system"]["gpus"][0]["name"] == "NVIDIA GeForce RTX 5080"
@@ -87,12 +105,14 @@ async def test_snapshot_shows_the_mac_and_the_pc_with_loaded_models() -> None:
 async def test_a_pc_without_the_monitor_or_switched_off_still_gets_a_card() -> None:
     router = ModelRouter(OllamaClient("http://mac.test", transport=ollama([])),
                          hosts={"pc": "http://192.168.1.9:11434"}, host_transport=ollama([]))
-    _, pc = await hardware.snapshot(router, monitor_transport=monitor(None))
+    _, pc = await hardware.snapshot(router, monitor_transport=monitor(None), prober=fast_link)
     assert pc["online"] and pc["monitor"] == "missing" and pc["system"] is None
+    assert pc["availability"]["state"] == "ready" and pc["link"]["quality"] == "excellent"
     off = ModelRouter(OllamaClient("http://mac.test", transport=ollama([])),
                       hosts={"pc": "http://192.168.1.9:11434"}, host_transport=ollama([], online=False))
-    _, pc = await hardware.snapshot(off, monitor_transport=monitor(None))
+    _, pc = await hardware.snapshot(off, monitor_transport=monitor(None), prober=dead_link)
     assert not pc["online"] and pc["loaded"] == []
+    assert pc["availability"]["state"] == "offline" and pc["link"]["quality"] == "unreachable"
 
 
 def test_api_hardware(tmp_path: Any) -> None:
@@ -105,7 +125,52 @@ def test_api_hardware(tmp_path: Any) -> None:
                          hosts={"pc": "http://192.168.1.9:11434"}, host_transport=ollama([]))
     app = api.create_app(Settings(), llm=router, db_path=":memory:")
     app.state.monitor_transport = monitor(PC_STATS)
+    app.state.link_prober = fast_link
     with TestClient(app) as client:
         cards = client.get("/api/hardware").json()
     assert [c["id"] for c in cards] == ["local", "pc"]
     assert json.dumps(cards).count("RTX 5080") == 1
+
+
+@pytest.mark.parametrize("rtts,attempts,quality", [
+    ([4.8, 5.0, 4.9, 5.2, 4.7, 5.1], 6, "excellent"),
+    ([18, 22, 25, 20, 19, 24], 6, "good"),
+    ([45, 70, 50, 60], 5, "fair"),      # slower, and 1 of 5 attempts lost
+    ([150, 300, 120], 6, "poor"),
+    ([], 6, "unreachable"),
+])
+def test_link_ratings(rtts: list[float], attempts: int, quality: str) -> None:
+    r = hardware.rate_link(rtts, attempts)
+    assert r["quality"] == quality and r["verdict"]
+    if rtts:
+        assert r["latency_ms"] == pytest.approx(sorted(rtts)[len(rtts) // 2], abs=15)
+
+
+def test_availability_explains_what_is_wrong() -> None:
+    up = hardware.rate_link([5.0], 1)
+    down = hardware.rate_link([], 1)
+    assert hardware.availability(True, up, False)["state"] == "ready"
+    assert hardware.availability(False, up, False)["state"] == "ollama_error"
+    assert hardware.availability(False, down, True)["state"] == "no_ollama"
+    assert hardware.availability(False, down, False)["state"] == "offline"
+
+
+def test_wifi_signal_from_system_profiler() -> None:
+    data = {"SPAirPortDataType": [{"spairport_airport_interfaces": [
+        {"_name": "en0", "spairport_current_network_information": {
+            "_name": "HomeNet", "spairport_network_channel": "157 (5GHz, 80MHz)", "spairport_network_rate": 260,
+            "spairport_network_phymode": "802.11ac", "spairport_signal_noise": "-62 dBm / -94 dBm"}},
+        {"_name": "awdl0", "spairport_current_network_information": {}}]}]}
+    w = hardware.parse_airport(data)
+    assert w == {"type": "Wi-Fi", "signal_dbm": -62, "noise_dbm": -94, "snr_db": 32, "quality": "good",
+                 "band": "5GHz", "channel": "157", "link_mbps": 260, "standard": "802.11ac"}
+    assert "HomeNet" not in json.dumps(w)  # the network's name is never sent to the UI
+    assert hardware.parse_airport({"SPAirPortDataType": [{}]}) is None
+
+
+def test_pc_network_from_the_monitor() -> None:
+    n = hardware.normalize_monitor({**PC_STATS, "network": {"type": "Wi-Fi", "link_mbps": 866,
+                                                            "wifi_signal_pct": 72, "adapter": "Intel Wi-Fi 7"}})
+    assert n["network"] == {"type": "Wi-Fi", "link_mbps": 866.0, "adapter": "Intel Wi-Fi 7",
+                            "wifi_signal_pct": 72.0, "quality": "good"}
+    assert hardware.normalize_monitor(PC_STATS)["network"] is None

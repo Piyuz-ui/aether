@@ -209,6 +209,36 @@ export type MachineSystem = {
   gpus: GpuInfo[];
   /** Apple silicon: the GPU shares system memory, so there's no separate VRAM. */
   unified_memory: boolean;
+  network?: NetworkLink | null;
+};
+export type SignalQuality = "excellent" | "good" | "fair" | "weak";
+/** How a machine is connected. Mac: Wi-Fi in dBm. PC (from its monitor): cable or Wi-Fi in %. */
+export type NetworkLink = {
+  type: string;
+  quality?: SignalQuality | null;
+  signal_dbm?: number;
+  noise_dbm?: number;
+  snr_db?: number;
+  band?: string | null;
+  channel?: string | null;
+  link_mbps?: number | null;
+  standard?: string | null;
+  adapter?: string | null;
+  wifi_signal_pct?: number | null;
+};
+export type LinkQuality = {
+  latency_ms: number | null;
+  jitter_ms: number | null;
+  loss_pct: number;
+  quality: "excellent" | "good" | "fair" | "poor" | "unreachable";
+  bars: number;
+  verdict: string;
+  samples: number;
+};
+export type Availability = {
+  state: "ready" | "ollama_error" | "no_ollama" | "offline";
+  label: string;
+  detail: string;
 };
 export type LoadedModel = { name: string; size_gb: number; vram_gb: number; gpu_pct: number; context: number | null };
 export type HardwareCard = {
@@ -217,6 +247,8 @@ export type HardwareCard = {
   url?: string;
   online: boolean;
   monitor: "built-in" | "ok" | "missing";
+  link?: LinkQuality;
+  availability?: Availability;
   system: MachineSystem | null;
   loaded: LoadedModel[];
 };

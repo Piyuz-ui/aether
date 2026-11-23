@@ -1,7 +1,8 @@
 <#
   AETHER - hardware monitor for a GPU PC.
 
-  Lets AETHER (Settings > Hardware) show this PC's GPU, VRAM, GPU load, temperature, RAM and CPU.
+  Lets AETHER (Settings > Hardware) show this PC's GPU, VRAM, GPU load, temperature, RAM and CPU,
+  and how it's connected (cable or Wi-Fi, link speed, Wi-Fi signal).
   It's a small read-only PowerShell web server on port 11435 that answers GET /stats with numbers
   from nvidia-smi and Windows. It starts hidden when you log in.
 
@@ -74,6 +75,24 @@ function Get-Stats {
             }
         }
     }
+    # How this PC is connected: cable or Wi-Fi, link speed, and Wi-Fi signal (no network name).
+    $network = $null
+    try {
+        $route = Get-NetRoute -DestinationPrefix "0.0.0.0/0" -ErrorAction Stop | Sort-Object RouteMetric | Select-Object -First 1
+        $ad = Get-NetAdapter -InterfaceIndex $route.ifIndex -ErrorAction Stop
+        $isWifi = ("$($ad.PhysicalMediaType)" -match "802\.11") -or ("$($ad.InterfaceDescription)" -match "Wi-?Fi|Wireless|WLAN")
+        $network = [ordered]@{
+            type            = if ($isWifi) { "Wi-Fi" } else { "Ethernet" }
+            link_mbps       = [math]::Round([double]$ad.ReceiveLinkSpeed / 1000000)
+            adapter         = "$($ad.InterfaceDescription)"
+            wifi_signal_pct = $null
+        }
+        if ($isWifi) {
+            $sig = (netsh wlan show interfaces) | Select-String "^\s*Signal\s*:\s*(\d+)\s*%"
+            if ($sig) { $network.wifi_signal_pct = [int]$sig.Matches[0].Groups[1].Value }
+        }
+    } catch { }
+
     return [ordered]@{
         hostname     = $env:COMPUTERNAME
         cpu          = $CpuName
@@ -81,6 +100,7 @@ function Get-Stats {
         ram_total_gb = [math]::Round($total / 1GB, 1)
         ram_used_gb  = [math]::Round(($total - $free) / 1GB, 1)
         gpus         = @($gpus)
+        network      = $network
     }
 }
 
@@ -144,6 +164,11 @@ Write-Host ""
 if ($stats) {
     foreach ($g in @($stats.gpus)) { Ok ("GPU: {0} - {1} of {2} GB VRAM in use" -f $g.name, $g.vram_used_gb, $g.vram_total_gb) }
     Ok ("RAM: {0} of {1} GB in use - CPU: {2}" -f $stats.ram_used_gb, $stats.ram_total_gb, $stats.cpu)
+    if ($stats.network) {
+        $n = $stats.network
+        $sig = if ($n.wifi_signal_pct -ne $null) { ", signal $($n.wifi_signal_pct)%" } else { "" }
+        Ok ("Network: {0} at {1} Mbps{2}" -f $n.type, $n.link_mbps, $sig)
+    }
     Write-Host "  Done. Open AETHER: Settings > Hardware." -ForegroundColor Green
 } else {
     Warn "The monitor didn't answer yet. Log out and back in, or run: Start-ScheduledTask -TaskName '$TaskName'"

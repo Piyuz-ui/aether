@@ -302,7 +302,8 @@ def create_app(settings: Settings | None = None, *, llm: Any = None,
         """This computer and every network GPU PC: GPU, VRAM, RAM and the models loaded on them."""
         from aether.hardware import snapshot
         ctx = ctx_of(request)
-        return await snapshot(ctx.llm, monitor_transport=getattr(request.app.state, "monitor_transport", None))
+        return await snapshot(ctx.llm, monitor_transport=getattr(request.app.state, "monitor_transport", None),
+                              prober=getattr(request.app.state, "link_prober", None))
 
     # ------------------------------------------- computers on your network
     @app.get("/api/hosts")
