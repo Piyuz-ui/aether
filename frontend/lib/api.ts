@@ -7,6 +7,7 @@ export type McpServer = {
 import type {
   ClassSlot,
   CloudProvider,
+  HardwareCard,
   ModelList,
   NetworkHost,
   Fact,
@@ -66,6 +67,7 @@ export const api = {
   setModel: (model: string) => request<{ current: string; cloud?: boolean }>("/api/models", json("POST", { model })),
   providers: () => request<CloudProvider[]>("/api/providers"),
   hosts: () => request<NetworkHost[]>("/api/hosts"),
+  hardware: () => request<HardwareCard[]>("/api/hardware"),
   setHost: (name: string, url: string) => request<NetworkHost>(`/api/hosts/${name}`, json("PUT", { url })),
   removeHost: (name: string) => request<{ removed: string }>(`/api/hosts/${name}`, json("DELETE")),
   setProviderKey: (id: string, key: string) =>

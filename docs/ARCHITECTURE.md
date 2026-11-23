@@ -141,6 +141,7 @@ ai agent/
 │   │   ├── events.py              AgentEvent + event types
 │   │   ├── metrics.py             tokens, context window use, timing
 │   │   ├── workspace.py           path-jail for all file access
+│   │   ├── hardware.py        live GPU / VRAM / RAM per machine + models loaded in GPU memory
 │   │   ├── llm/
 │   │   │   ├── ollama.py          async streaming client, model resolution, errors with hints
 │   │   │   ├── cloud.py           10 OpenAI-compatible providers (with per-provider quirks) + Claude (Anthropic SDK)

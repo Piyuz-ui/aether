@@ -16,6 +16,7 @@ import { useLive } from "@/lib/useLive";
 import { speechSupported } from "@/lib/voice";
 
 import { Chip, JiggleButton, Toggle } from "../ui";
+import { HardwareSection } from "./HardwareSection";
 import { ErrorNote, inputClass, PanelTitle } from "./shared";
 
 const ENGINE_LABEL: Record<string, string> = {
@@ -425,6 +426,8 @@ export function SettingsPanel({ health, onHealthChange, revision, toast }: {
           {health?.embeddings_hint && <p className="font-mono text-[11px] text-frost/75">→ {health.embeddings_hint}</p>}
         </div>
       </section>
+
+      <HardwareSection revision={revision} />
 
       <HostsSection revision={revision} toast={toast} onChanged={() => { void models.reload(); onHealthChange(); }} />
 

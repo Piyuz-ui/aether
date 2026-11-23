@@ -296,6 +296,14 @@ def create_app(settings: Settings | None = None, *, llm: Any = None,
         ctx.agent.set_model(body.model)
         return {"current": body.model, "cloud": pid is not None}
 
+    # ---------------------------------------------------------- hardware
+    @app.get("/api/hardware")
+    async def hardware(request: Request) -> list[dict[str, Any]]:
+        """This computer and every network GPU PC: GPU, VRAM, RAM and the models loaded on them."""
+        from aether.hardware import snapshot
+        ctx = ctx_of(request)
+        return await snapshot(ctx.llm, monitor_transport=getattr(request.app.state, "monitor_transport", None))
+
     # ------------------------------------------- computers on your network
     @app.get("/api/hosts")
     async def hosts(request: Request) -> list[dict[str, Any]]:

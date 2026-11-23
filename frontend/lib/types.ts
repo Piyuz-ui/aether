@@ -190,3 +190,33 @@ export type TranscriptMessage =
     };
 
 export type ToolInfo = { name: string; description: string; category: string; icon: string; risk: string };
+
+export type GpuInfo = {
+  name: string;
+  vram_total_gb: number | null;
+  vram_used_gb: number | null;
+  util_pct: number | null;
+  temp_c: number | null;
+  power_w: number | null;
+  driver: string | null;
+};
+export type MachineSystem = {
+  hostname: string | null;
+  cpu: string | null;
+  cpu_pct?: number | null;
+  ram_total_gb: number | null;
+  ram_used_gb: number | null;
+  gpus: GpuInfo[];
+  /** Apple silicon: the GPU shares system memory, so there's no separate VRAM. */
+  unified_memory: boolean;
+};
+export type LoadedModel = { name: string; size_gb: number; vram_gb: number; gpu_pct: number; context: number | null };
+export type HardwareCard = {
+  id: string;
+  label: string;
+  url?: string;
+  online: boolean;
+  monitor: "built-in" | "ok" | "missing";
+  system: MachineSystem | null;
+  loaded: LoadedModel[];
+};
