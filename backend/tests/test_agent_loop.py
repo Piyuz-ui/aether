@@ -158,3 +158,56 @@ async def test_precheck_rejects_missing_file_before_asking(settings):
     assert EventType.APPROVAL_REQUIRED not in types(events)
     result = next(e for e in events if e.type is EventType.TOOL_RESULT).data
     assert "doesn't exist" in result["output"] and "python-release.md" in result["output"]
+
+
+async def test_unfixed_tool_failure_is_sent_back_once(settings, mem):
+    llm = FakeLLM([call("add_task", title="DBMS exam", due="whenever", kind="exam"),
+                   say("Your exam has been tracked!"),  # false claim → nudged
+                   call("add_task", title="DBMS exam", due="tomorrow", kind="exam"),
+                   say("Added your DBMS exam for tomorrow.")])
+    events = await run(AetherAgent(settings, llm=llm), "track my DBMS exam tomorrow")
+    assert any(e.type is EventType.THOUGHT and e.data.get("kind") == "retry" for e in events)
+    assert "failed" in llm.requests[2]["messages"][-1]["content"]
+    assert done(events)["answer"] == "Added your DBMS exam for tomorrow."
+    assert mem.tasks.list()[0]["title"] == "DBMS exam"
+
+
+async def test_announced_but_uncalled_tool_is_nudged(settings, mem):
+    llm = FakeLLM([say("Let me check. I'll use manage_timetable to list your classes."),
+                   call("manage_timetable", action="list"), say("You have no classes yet.")])
+    events = await run(AetherAgent(settings, llm=llm), "what classes do I have?")
+    assert "didn't call it" in llm.requests[1]["messages"][-1]["content"]
+    assert done(events)["answer"] == "You have no classes yet."
+
+
+async def test_denied_tools_are_not_nudged(settings):
+    workspace().resolve("notes/k.md").write_text("k")
+    llm = FakeLLM([call("delete_file", path="notes/k.md"), say("Okay, I kept it.")])
+    events = await run(AetherAgent(settings, llm=llm), "delete notes/k.md", approve=False)
+    assert not any(e.data.get("kind") == "retry" for e in events if e.type is EventType.THOUGHT)
+    assert done(events)["answer"] == "Okay, I kept it."
+
+
+async def test_runaway_generation_is_cut_off_and_retried(settings):
+    llm = FakeLLM([{"content": "I will I will I will I will", "done_reason": "length"},
+                   say("Short answer: 4.")])
+    events = await run(AetherAgent(settings, llm=llm), "2+2?")
+    assert any(e.type is EventType.THOUGHT and "too long" in e.data["text"] for e in events)
+    assert "cut off" in llm.requests[1]["messages"][-1]["content"]
+    assert done(events)["answer"] == "Short answer: 4."
+    assert llm.requests and True
+
+
+async def test_output_cap_is_sent_to_ollama(settings):
+    agent = AetherAgent(settings, llm=FakeLLM([say("ok")]))
+    assert agent._options["num_predict"] == settings.max_output_tokens == 2048
+
+
+async def test_stops_waiting_after_tool_call_when_model_keeps_going(settings):
+    import time as _time
+    fast = settings.model_copy(update={"tool_call_grace_s": 0.2})
+    llm = FakeLLM([call("python_calculator", expression="6*7") | {"hang": True}, say("42")])
+    started = _time.perf_counter()
+    events = await run(AetherAgent(fast, llm=llm), "6*7?")
+    assert _time.perf_counter() - started < 2
+    assert done(events)["answer"] == "42"

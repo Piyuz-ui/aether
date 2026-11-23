@@ -48,6 +48,7 @@ class ToolResult:
     ok: bool
     output: str
     duration_s: float = 0.0
+    denied: bool = False  # the user refused approval (not a mistake the model should fix)
 
 
 @dataclass

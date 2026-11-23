@@ -11,6 +11,7 @@ import asyncio
 import contextlib
 import json
 import sys
+from pathlib import Path
 from typing import Any
 
 from rich.console import Console, Group
@@ -27,6 +28,10 @@ from rich.theme import Theme
 from aether import __version__
 from aether.config import get_settings
 from aether.engine import AetherAgent, Session
+from aether.llm.ollama import OllamaClient
+from aether.memory import MemorySystem
+from aether.memory.knowledge import KnowledgeError
+from aether.tools.context import set_memory
 from aether.events import AgentEvent, AgentState, EventType
 from aether.llm.ollama import OllamaError
 from aether.metrics import fmt_seconds
@@ -53,16 +58,21 @@ HELP = """\
 
 | | |
 |---|---|
+| `/ingest <file…>` | add PDFs / Markdown / text to the knowledge vault (drag files in) |
+| `/docs` | list the knowledge vault |
+| `/memory` | what AETHER remembers about you · `/forget <id>` deletes one |
+| `/tasks` · `/timetable` | your deadlines and weekly classes |
+| `/sessions` · `/resume <n>` | past conversations, and continue one |
 | `/tools` | list tools and which ones need approval |
 | `/model [name]` | show installed models, or switch to one |
 | `/stats` | tokens, context and timing for this session |
 | `/verbose` | show full tool output on/off |
-| `/reset` | start a fresh conversation |
+| `/reset` | start a new conversation |
 | `/exit` | quit |
 
-Try: *"Search the web for the latest Python release and write me a note about what's new"* ·
-*"What's the standard deviation of 72, 85, 91, 64 and 88?"* ·
-*"Delete notes/test.md"* (shows the safety gate)
+Try: *"I'm a BCA AI & Data Science student, remember that"* ·
+*"My DBMS exam is next Friday"* · *"/ingest ~/Downloads/notes.pdf"* then *"what does my PDF say about
+normalization?"* · *"Research what's new in Python and save a note"* · *"Delete that note"* (safety gate)
 """
 
 
@@ -123,12 +133,24 @@ class StreamView:
 
 
 class CLI:
-    def __init__(self, model: str | None = None) -> None:
+    def __init__(self, model: str | None = None, *, llm: Any = None,
+                 db_path: str | None = None) -> None:
         self.settings = get_settings()
-        self.agent = AetherAgent(self.settings)
+        self.llm = llm or OllamaClient(self.settings.ollama_url,
+                                       timeout_s=self.settings.request_timeout_s)
+        self.memory = MemorySystem(self.settings, self.llm, db_path=db_path)
+        set_memory(self.memory)
+
+        async def learn(goal: str, answer: str, model_name: str) -> list[dict[str, Any]]:
+            if not self.settings.auto_memory:
+                return []
+            return await self.memory.extract_facts(self.llm, model_name, goal, answer)
+
+        self.agent = AetherAgent(self.settings, llm=self.llm,
+                                 memory_provider=self.memory.build_context, after_turn=learn)
         if model:
             self.agent.set_model(model)
-        self.session = Session()
+        self.session: Session = self.memory.session()
         self.view = StreamView()
         self.verbose = False
         self.session_stats: list[dict[str, Any]] = []
@@ -184,6 +206,10 @@ class CLI:
                 if stats:
                     console.print(Text(f"  ⏱ {stats.get('summary', '')}", style="mist"))
                 v.reset_text()
+            case EventType.MEMORY:
+                for fact in d.get("saved", []):
+                    console.print(Text("  🧠 remembered: ", style="seafoam") +
+                                  Text(fact["text"], style="mist"))
             case EventType.ERROR:
                 v.stop()
                 msg = Text(d["message"], style="danger.bold")
@@ -230,8 +256,10 @@ class CLI:
                                 border_style="danger"))
             return False
         info = Text(f"brain ", style="mist") + Text(model, style="periwinkle")
-        info.append(f" · {len(REGISTRY.all())} tools · workspace ", style="mist")
-        info.append(str(self.settings.workspace_dir), style="periwinkle")
+        info.append(f" · {len(REGISTRY.all())} tools", style="mist")
+        facts, docs = len(self.memory.facts.all()), len(self.memory.knowledge.documents())
+        tasks = len(self.memory.tasks.list())
+        info.append(f" · {facts} memories · {docs} documents · {tasks} open tasks", style="mist")
         lines: list[Any] = [title, info]
         if self.agent.model_note:
             lines.append(Text(f"note: {self.agent.model_note}", style="warn"))
@@ -276,12 +304,101 @@ class CLI:
             self.verbose = not self.verbose
             console.print(Text(f"Full tool output {'on' if self.verbose else 'off'}.", style="mist"))
         elif cmd == "reset":
-            self.session = Session()
+            self.session = self.memory.session()
             self.session_stats.clear()
-            console.print(Text("Fresh conversation started.", style="seafoam"))
+            console.print(Text("New conversation started. Long-term memory is kept.", style="seafoam"))
+        elif cmd == "ingest":
+            await self._ingest(arg)
+        elif cmd == "docs":
+            docs = self.memory.knowledge.documents()
+            if not docs:
+                console.print(Text("The knowledge vault is empty. Add files with /ingest <file>.",
+                                   style="mist"))
+            for d in docs:
+                state = (f"[seafoam]ready[/] · {d['chunks']} passages" if d["status"] == "ready"
+                         else f"[warn]{d['status']}[/]")
+                console.print(f"  #{d['id']} [glacier]{d['filename']}[/] · {d['pages']} pages · {state}")
+                if d["error"]:
+                    console.print(Text(f"      {d['error']}", style="mist"))
+        elif cmd == "memory":
+            facts = self.memory.facts.all()
+            if not facts:
+                console.print(Text("Nothing remembered yet. Tell me about yourself!", style="mist"))
+            for f in facts:
+                tag = "auto" if f["source"] == "auto" else "you"
+                console.print(f"  [glacier]#{f['id']}[/] [mist]{f['category']} · {tag}[/]  {f['text']}")
+        elif cmd == "forget":
+            if arg.isdigit() and self.memory.facts.delete(int(arg)):
+                console.print(Text(f"Forgot memory #{arg}.", style="seafoam"))
+            else:
+                console.print(Text("Usage: /forget <id> (see /memory).", style="warn"))
+        elif cmd == "tasks":
+            tasks = self.memory.tasks.list()
+            if not tasks:
+                console.print(Text("No open tasks. 🎉", style="seafoam"))
+            for t in tasks:
+                style = "danger" if t["overdue"] else "glacier"
+                console.print(f"  [{style}]#{t['id']}[/] [mist]{t['kind']}[/] {t['title']} "
+                              f"[{style}]· {t['when']}[/]")
+        elif cmd == "timetable":
+            classes = self.memory.tasks.classes()
+            if not classes:
+                console.print(Text("No classes yet. Try: \"I have DBMS every Monday 9 to 10 in "
+                                   "room 204\"", style="mist"))
+            for c in classes:
+                where = f" · {c['location']}" if c["location"] else ""
+                console.print(f"  [glacier]#{c['id']}[/] {c['day'][:3]} {c['start']}–{c['end']} "
+                              f"{c['course']}[mist]{where}[/]")
+        elif cmd == "sessions":
+            for i, ses in enumerate(self.memory.store.list_sessions(15), 1):
+                mark = "◉" if ses["id"] == self.session.id else "○"
+                console.print(f"  {mark} [glacier]{i:>2}[/] {ses['title']} [mist]· "
+                              f"{ses['turns']} turn(s)[/]")
+        elif cmd == "resume":
+            sessions = self.memory.store.list_sessions(15)
+            if arg.isdigit() and 1 <= int(arg) <= len(sessions):
+                chosen = sessions[int(arg) - 1]
+                self.session = self.memory.session(chosen["id"])
+                console.print(Text(f"Continuing \"{chosen['title']}\" "
+                                   f"({len(self.session.turns)} turns).", style="seafoam"))
+            else:
+                console.print(Text("Usage: /resume <n> (see /sessions).", style="warn"))
         else:
             console.print(Text(f"Unknown command /{cmd}. Try /help.", style="warn"))
         return True
+
+    async def _ingest(self, arg: str) -> None:
+        import shlex
+        try:
+            paths = [Path(p).expanduser() for p in shlex.split(arg)]
+        except ValueError:
+            paths = [Path(arg).expanduser()]
+        if not paths:
+            console.print(Text("Usage: /ingest <file> [more files…]  (PDF, MD or TXT)", style="warn"))
+            return
+        for path in paths:
+            if not path.is_file():
+                console.print(Text(f"  ✗ {path} isn't a file.", style="danger"))
+                continue
+            with console.status(Text(f" indexing {path.name}…", style="glacier"),
+                                spinner="dots12", spinner_style="sky") as status:
+                def progress(p: dict[str, Any]) -> None:
+                    pct = int(100 * float(p.get("progress", 0)))
+                    status.update(Text(f" {p.get('status', 'indexing')} {path.name}… {pct}%",
+                                       style="glacier"))
+                try:
+                    doc = await self.memory.knowledge.ingest(path, on_progress=progress)
+                except KnowledgeError as e:
+                    console.print(Text(f"  ✗ {path.name}: {e}", style="danger"))
+                    continue
+            if doc.get("status") == "ready":
+                console.print(Text(f"  ✓ {doc['filename']}: {doc['pages']} pages, "
+                                   f"{doc['chunks']} passages indexed", style="seafoam"))
+                if doc.get("error"):
+                    console.print(Text(f"    {doc['error']}", style="warn"))
+            else:
+                console.print(Text(f"  ✗ {doc.get('filename', path.name)}: {doc.get('error')}",
+                                   style="danger"))
 
     def _print_stats(self) -> None:
         if not self.session_stats:
@@ -343,6 +460,7 @@ def main() -> None:
     finally:
         with contextlib.suppress(Exception):
             loop.run_until_complete(cli.agent.llm.aclose())  # type: ignore[attr-defined]
+        cli.memory.close()
         loop.close()
 
 

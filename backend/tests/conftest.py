@@ -51,12 +51,43 @@ def call(name: str, **args: Any) -> dict[str, Any]:
     return {"content": "", "tool_calls": [{"function": {"name": name, "arguments": args}}]}
 
 
-class FakeLLM:
-    """Replays scripted replies as a token stream, like Ollama does."""
+def fake_embedding(text: str, dims: int = 96) -> list[float]:
+    """Deterministic bag-of-words vector, so texts sharing words are 'similar'."""
+    import hashlib
+    import math
+    import re as _re
+    vec = [0.0] * dims
+    for word in _re.findall(r"[a-z0-9]+", text.lower().replace("search_document:", "")
+                            .replace("search_query:", "")):
+        if len(word) < 3:
+            continue
+        vec[int(hashlib.md5(word.encode()).hexdigest(), 16) % dims] += 1.0
+    norm = math.sqrt(sum(v * v for v in vec)) or 1.0
+    return [v / norm for v in vec]
 
-    def __init__(self, replies: list[dict[str, Any]]):
-        self.replies = list(replies)
+
+class FakeLLM:
+    """Replays scripted replies as a token stream, like Ollama does, and embeds text."""
+
+    def __init__(self, replies: list[dict[str, Any]] | None = None, *, embeddings: bool = True):
+        self.replies = list(replies or [])
         self.requests: list[dict[str, Any]] = []
+        self.embeddings = embeddings
+
+    async def embed(self, texts: list[str], model: str) -> list[list[float]]:
+        if not self.embeddings:
+            from aether.llm.ollama import OllamaError
+            raise OllamaError(f"Model '{model}' isn't installed.", hint=f"Run: ollama pull {model}")
+        return [fake_embedding(t) for t in texts]
+
+    async def health(self) -> bool:
+        return True
+
+    async def list_models(self) -> list[str]:
+        return ["fake-model", "other-model"]
+
+    async def aclose(self) -> None:
+        return None
 
     async def resolve_model(self, preferred: str, fallbacks: list[str]) -> tuple[str, str | None]:
         return "fake-model", None
@@ -73,8 +104,55 @@ class FakeLLM:
             yield ChatDelta(content=text[i:i + 7])
         if reply.get("tool_calls"):
             yield ChatDelta(tool_calls=reply["tool_calls"])
-        yield ChatDelta(done=True, stats=CallStats(prompt_tokens=100, output_tokens=10,
-                                                   total_s=0.1, gen_s=0.05))
+        if reply.get("hang"):  # simulate a model that keeps generating hidden junk forever
+            import asyncio
+            await asyncio.sleep(3600)
+        yield ChatDelta(done=True, done_reason=reply.get("done_reason", "stop"),
+                        stats=CallStats(prompt_tokens=100, output_tokens=10, total_s=0.1, gen_s=0.05))
+
+
+def make_pdf(path: Path, pages: list[str]) -> Path:
+    """Write a small but real PDF with one line of text per page (no extra libraries)."""
+    objs: list[bytes] = []
+    n = len(pages)
+    font_id = 3
+    page_ids = [4 + 2 * i for i in range(n)]
+    objs.append(b"<< /Type /Catalog /Pages 2 0 R >>")
+    kids = " ".join(f"{p} 0 R" for p in page_ids)
+    objs.append(f"<< /Type /Pages /Kids [{kids}] /Count {n} >>".encode())
+    objs.append(b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>")
+    for i, text in enumerate(pages):
+        safe = text.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
+        stream = f"BT /F1 12 Tf 72 720 Td ({safe}) Tj ET".encode()
+        objs.append(f"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents "
+                    f"{page_ids[i] + 1} 0 R /Resources << /Font << /F1 {font_id} 0 R >> >> >>".encode())
+        objs.append(b"<< /Length " + str(len(stream)).encode() + b" >>\nstream\n" + stream +
+                    b"\nendstream")
+    out = bytearray(b"%PDF-1.4\n")
+    offsets = []
+    for i, body in enumerate(objs, 1):
+        offsets.append(len(out))
+        out += f"{i} 0 obj\n".encode() + body + b"\nendobj\n"
+    xref = len(out)
+    out += f"xref\n0 {len(objs) + 1}\n0000000000 65535 f \n".encode()
+    for off in offsets:
+        out += f"{off:010d} 00000 n \n".encode()
+    out += f"trailer\n<< /Size {len(objs) + 1} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n".encode()
+    path.write_bytes(bytes(out))
+    return path
+
+
+@pytest.fixture
+def mem(settings, tmp_path):
+    """A fresh MemorySystem (in-memory DB) wired into the tools, with fake embeddings."""
+    from aether.memory import MemorySystem
+    from aether.tools.context import set_memory
+    s = settings.model_copy(update={"data_dir": tmp_path / "data"})
+    system = MemorySystem(s, FakeLLM(), db_path=":memory:")
+    set_memory(system)
+    yield system
+    set_memory(None)
+    system.close()
 
 
 @pytest.fixture

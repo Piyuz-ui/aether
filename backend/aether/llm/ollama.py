@@ -28,6 +28,7 @@ class ChatDelta:
     thinking: str = ""
     tool_calls: list[dict[str, Any]] = field(default_factory=list)
     done: bool = False
+    done_reason: str = ""  # "stop", or "length" when the output cap was hit
     stats: CallStats | None = None
 
 
@@ -123,6 +124,7 @@ class OllamaClient:
                                       done=bool(chunk.get("done")))
                     if delta.done:
                         delta.stats = CallStats.from_ollama(chunk)
+                        delta.done_reason = chunk.get("done_reason") or ""
                     yield delta
         except httpx.ConnectError as e:
             raise self._offline_error() from e

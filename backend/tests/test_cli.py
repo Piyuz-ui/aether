@@ -34,8 +34,7 @@ def term(monkeypatch):
 
 
 def make_cli(replies, monkeypatch, approve: bool):
-    c = cli.CLI()
-    c.agent.llm = FakeLLM(replies)
+    c = cli.CLI(llm=FakeLLM(replies), db_path=":memory:")
     c.agent.model = "fake-model"
     monkeypatch.setattr(cli.Confirm, "ask", lambda *a, **k: approve)
     return c
@@ -79,6 +78,8 @@ def test_every_event_type_renders(term, monkeypatch):
                                            "duration_s": 0.1}),
         AgentEvent(EventType.APPROVAL_RESOLVED, {"approved": False, "reason": "no"}),
         AgentEvent(EventType.DONE, {"answer": "**Hi**", "stats": {"summary": "1 s"}}),
+        AgentEvent(EventType.MEMORY, {"saved": [{"id": 1, "text": "The user likes tea.",
+                                                 "category": "preference"}]}),
         AgentEvent(EventType.ERROR, {"message": "Ollama is off", "hint": "Open Ollama"}),
     ]
     for e in events:
@@ -91,7 +92,9 @@ def test_every_event_type_renders(term, monkeypatch):
 async def test_banner_and_commands_render(term, monkeypatch):
     c = make_cli([], monkeypatch, approve=True)
     assert await c.banner()
-    for command in ["/help", "/tools", "/stats", "/verbose", "/reset", "/nope"]:
+    for command in ["/help", "/tools", "/stats", "/verbose", "/reset", "/nope", "/docs",
+                    "/memory", "/forget 99", "/tasks", "/timetable", "/sessions", "/resume 1",
+                    "/ingest /does/not/exist.pdf"]:
         assert await c.command(command)
     assert not await c.command("/exit")
     assert "A E T H E R" in term.getvalue()

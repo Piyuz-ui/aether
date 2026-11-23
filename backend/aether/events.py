@@ -17,6 +17,7 @@ class EventType(StrEnum):
     APPROVAL_RESOLVED = "approval_resolved"  # data: approval_id, approved, reason
     TOOL_RESULT = "tool_result"              # data: call_id, name, ok, output, duration_s
     DONE = "done"                            # data: answer, stats
+    MEMORY = "memory"                        # data: saved (facts learned this turn)
     ERROR = "error"                          # data: message, hint
 
 

@@ -28,15 +28,16 @@ flowchart TB
         T1["web_search / read_webpage"]
         T2["python_calculator (AST sandbox)"]
         T3["write_note / read_file / list_files"]
-        T4["search_knowledge_base (RAG)"]
-        T5["manage_tasks (deadlines · timetable)"]
+        T4["search_knowledge_base · list_documents (RAG)"]
+        T5["add_task · manage_tasks · add_class · manage_timetable"]
+        T7["remember · recall_memory · forget ⚠"]
         T6["run_python · run_shell_command · delete_file ⚠"]
     end
 
     subgraph Memory["aether.memory"]
         STM["Short-term: session messages (SQLite)"]
         LTM["Long-term facts and profile (SQLite)"]
-        VEC["Vector store: sqlite-vec<br/>PDF/note chunks + fact embeddings"]
+        VEC["Hybrid search: sqlite-vec cosine + FTS5 BM25<br/>fused with weighted RRF"]
     end
 
     OLLAMA[("Ollama · localhost:11434<br/>qwen2.5:7b · nomic-embed-text")]
@@ -105,6 +106,11 @@ Design choices:
 | File safety | `Workspace.resolve()` resolves symlinks and rejects anything outside `./workspace` | Blocks `../`, absolute-path and symlink escapes |
 | Calculator safety | Own AST interpreter with whitelisted nodes and functions. No `eval` | No attribute access, imports, or dunder tricks. Size limits on `**` and repetition |
 | Vector store | `sqlite-vec`, with an exact NumPy fallback | Single-file DB next to the rest of the SQLite data. ChromaDB was skipped because it pulls in a heavy dependency tree and its Python 3.14 wheel support is uncertain |
+| Retrieval | Hybrid: semantic (nomic-embed-text) + keyword (FTS5 BM25), weighted Reciprocal Rank Fusion, duplicate passages collapsed, at least 5 passages per query | Embeddings miss exact terms (course codes, formulas); BM25 misses paraphrases. Together they cover both |
+| Dates | The model passes dates in the user's words ("next Friday 5pm") and Python resolves them | 7B models get calendar maths wrong; code doesn't |
+| Runaway generations | `num_predict` cap per call, plus the stream is closed 2.5 s after a tool call arrives | Small models sometimes keep generating hidden junk after a valid call. Without this, one reply took 5 minutes |
+| Self-correction | If the model tries to finish with an unfixed tool failure, or announces a tool it never called, the engine sends it back once | Stops false claims like "I've tracked it" when the call actually failed |
+| Auto-learning | After `done`, a small extraction call saves new lasting facts. ≥ 80% similar facts are skipped. It uses the same `num_ctx` as chat | The answer is never delayed, there are no duplicates, and the model never reloads |
 
 ## 3. Event protocol
 
@@ -120,6 +126,7 @@ Every event is `{"type", "step", "ts", "data"}`.
 | `approval_resolved` | `approval_id`, `approved`, `reason` | Modal closes |
 | `tool_result` | `call_id`, `name`, `ok`, `output`, `duration_s` | Pill shows its result |
 | `done` | `answer`, `stats` (tokens, context %, timing) | Final message |
+| `memory` | `saved`: facts learned this turn | "🧠 remembered …" toast |
 | `error` | `message`, `hint` | Recovery instructions (for example "run `ollama pull …`") |
 
 ## 4. Directory layout
@@ -145,10 +152,20 @@ ai agent/
 │   │   │   ├── calculator.py      python_calculator (AST sandbox)
 │   │   │   ├── web.py             web_search, read_webpage (blocks private IPs)
 │   │   │   ├── notes.py           write_note, read_file, list_files
-│   │   │   └── system.py          run_python, run_shell_command, delete_file  ⚠ approval
-│   │   └── memory/                Phase 2: SQLite store, vector store, ingestion
+│   │   │   ├── system.py          run_python, run_shell_command, delete_file  ⚠ approval
+│   │   │   ├── knowledge.py       search_knowledge_base, list_documents
+│   │   │   ├── planner.py         add_task, manage_tasks, add_class, manage_timetable
+│   │   │   └── memory_tools.py    remember, recall_memory, forget
+│   │   ├── memory/
+│   │   │   ├── store.py           one SQLite file: sessions, messages, facts, tasks, timetable, docs, chunks (+FTS5)
+│   │   │   ├── embedder.py        Ollama embeddings (nomic prefixes), graceful keyword-only fallback
+│   │   │   ├── knowledge.py       PDF/MD/TXT ingestion with progress, chunking, hybrid search
+│   │   │   ├── facts.py           long-term facts with near-duplicate merging
+│   │   │   ├── taskbook.py        tasks + timetable, natural-language date parsing
+│   │   │   ├── sessions.py        PersistentSession (short-term memory in SQLite)
+│   │   │   └── __init__.py        MemorySystem: recall context + auto fact extraction
 │   ├── cli.py                     Rich terminal runner
-│   ├── api.py                     Phase 2: FastAPI + SSE
+│   ├── api.py                     FastAPI: SSE chat, approvals, sessions, memory, tasks, knowledge
 │   ├── tests/
 │   ├── requirements.txt
 │   └── .env.example
@@ -170,3 +187,26 @@ ollama pull nomic-embed-text    # embeddings for RAG and memory
 ```
 
 If `qwen2.5:7b` isn't installed, AETHER uses the first installed model from its fallback list (`qwen3:14b`, `qwen3:8b`, `llama3.1:8b`, …) and says so.
+
+## 6. HTTP API (Phase 2)
+
+Run `python api.py`, then open the interactive docs at `http://127.0.0.1:8000/docs`.
+
+| Method | Path | Purpose |
+|---|---|---|
+| GET | `/api/health` | Ollama status, model, embeddings, tool count |
+| GET / POST | `/api/models` | List installed models and switch the brain |
+| GET | `/api/tools` | Tools with category, icon and risk |
+| POST | `/api/chat` | `{message, session_id?}` → **SSE** stream: `session`, then the agent events |
+| GET | `/api/approvals` | Pending approval requests |
+| POST | `/api/approvals/{id}` | `{approved, reason?}` resumes the paused loop |
+| GET / PATCH / DELETE | `/api/sessions[/{id}]` | Chat history, as a UI-ready transcript with tool steps |
+| GET / POST / PATCH / DELETE | `/api/memory/facts[/{id}]` | Memory Inspector |
+| GET / POST / PATCH / DELETE | `/api/tasks[/{id}]` | Tasks, deadlines, exams, reminders |
+| GET / POST / DELETE | `/api/timetable[/{id}]` | Weekly classes |
+| GET / POST / DELETE | `/api/knowledge[/{id}]` | Upload (multipart; indexed in the background, poll for `progress`) and delete |
+| POST | `/api/knowledge/{id}/reindex` | Retry indexing (e.g. after pulling the embedding model) |
+| GET | `/api/knowledge/search?q=` | Hybrid search, for debugging RAG |
+
+When a client disconnects mid-stream, the run is closed and any pending approval is denied.
+A chat that is still answering returns `409` to a second message.

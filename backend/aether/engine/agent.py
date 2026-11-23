@@ -8,6 +8,8 @@ as Server-Sent Events. Nothing about the loop is hidden inside a framework.
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import re
 import time
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable
@@ -20,11 +22,16 @@ from ..llm.parsing import (ToolCallParseError, extract_tool_calls, looks_like_fa
                            parse_arguments, strip_thinking)
 from ..metrics import RunStats
 from ..tools import REGISTRY, Risk, ToolRegistry, ToolResult
-from .prompts import FORMAT_RETRY_MESSAGE, STEP_LIMIT_MESSAGE, build_system_prompt
+from .prompts import (CUT_OFF_MESSAGE, FORMAT_RETRY_MESSAGE, STEP_LIMIT_MESSAGE,
+                      build_system_prompt)
 from .safety import ApprovalBroker
 from .session import Session
 
 MemoryProvider = Callable[[str], Awaitable[str]]
+# "I'll use manage_timetable…", "let me call web_search" — a promise of a tool call.
+PROMISE_RE = re.compile(r"\b(i'll|i will|i'm going to|let me|let's|now i|next,? i)\b", re.IGNORECASE)
+# after_turn(goal, answer, model) → facts learned (shown to the user as a `memory` event)
+AfterTurn = Callable[[str, str, str], Awaitable[list[dict[str, Any]]]]
 
 
 class ChatModel(Protocol):
@@ -41,13 +48,15 @@ class ChatModel(Protocol):
 class AetherAgent:
     def __init__(self, settings: Settings | None = None, *, llm: ChatModel | None = None,
                  registry: ToolRegistry = REGISTRY, broker: ApprovalBroker | None = None,
-                 memory_provider: MemoryProvider | None = None):
+                 memory_provider: MemoryProvider | None = None,
+                 after_turn: AfterTurn | None = None):
         self.settings = settings or get_settings()
         self.llm: ChatModel = llm or OllamaClient(self.settings.ollama_url,
                                                   timeout_s=self.settings.request_timeout_s)
         self.registry = registry
         self.broker = broker or ApprovalBroker(self.settings.approval_timeout_s)
         self.memory_provider = memory_provider
+        self.after_turn = after_turn
         self.model: str | None = None
         self.model_note: str | None = None  # explains a fallback model choice, if any
 
@@ -63,7 +72,8 @@ class AetherAgent:
 
     @property
     def _options(self) -> dict[str, Any]:
-        return {"num_ctx": self.settings.context_length, "temperature": self.settings.temperature}
+        return {"num_ctx": self.settings.context_length, "temperature": self.settings.temperature,
+                "num_predict": self.settings.max_output_tokens}
 
     # ------------------------------------------------------------------ loop
     async def run(self, goal: str, session: Session, *,
@@ -90,6 +100,8 @@ class AetherAgent:
             tools = self.registry.schemas()
             known = self.registry.names
             format_retries = 0
+            nudges = 0
+            unresolved: dict[str, str] = {}  # tool → error of a failed call not yet fixed
             answer: str | None = None
 
             while step < s.max_steps:
@@ -97,8 +109,12 @@ class AetherAgent:
                 content_parts: list[str] = []
                 thinking_parts: list[str] = []
                 calls: list[dict[str, Any]] = []
-                async for d in self.llm.chat_stream(model=model, messages=messages, tools=tools,
-                                                    options=self._options, think=s.think):
+                cut_off = False
+                stream = self.llm.chat_stream(model=model, messages=messages, tools=tools,
+                                              options=self._options, think=s.think)
+                async for d in self._until_settled(stream, lambda: bool(calls)):
+                    if d.done and d.done_reason == "length":
+                        cut_off = True
                     if d.thinking:
                         thinking_parts.append(d.thinking)
                         yield ev(EventType.TOKEN, text=d.thinking, channel="thinking")
@@ -119,6 +135,15 @@ class AetherAgent:
                     if recovered:
                         calls, content = recovered, cleaned
 
+                if not calls and cut_off and format_retries < s.max_format_retries:
+                    # Hit the output cap with nothing usable (often a runaway loop).
+                    format_retries += 1
+                    yield ev(EventType.THOUGHT, kind="retry",
+                             text="The model's reply ran far too long, so I'm asking it to be concise.")
+                    messages += [{"role": "assistant", "content": content[:2000]},
+                                 {"role": "user", "content": CUT_OFF_MESSAGE}]
+                    continue
+
                 if not calls:
                     if looks_like_failed_tool_call(content, known) and \
                             format_retries < s.max_format_retries:
@@ -127,6 +152,16 @@ class AetherAgent:
                                  text="That tool call was malformed, so I'm asking the model to retry it.")
                         messages += [{"role": "assistant", "content": content},
                                      {"role": "user", "content": FORMAT_RETRY_MESSAGE}]
+                        continue
+                    nudge = self._nudge(content, unresolved, known)
+                    if nudge and nudges < s.max_nudges:
+                        # The model tried to finish with a broken tool call it never fixed,
+                        # or promised a tool it never called. Send it back once, precisely.
+                        nudges += 1
+                        unresolved.clear()
+                        yield ev(EventType.THOUGHT, kind="retry", text=nudge[0])
+                        messages += [{"role": "assistant", "content": content},
+                                     {"role": "user", "content": nudge[1]}]
                         continue
                     answer = content
                     break
@@ -148,6 +183,10 @@ class AetherAgent:
                         yield e
                     result = result_holder[0]
                     stats.tool_seconds.append((name, result.duration_s))
+                    if result.ok or result.denied:
+                        unresolved.pop(name, None)
+                    else:
+                        unresolved[name] = result.output
                     tool_msg = {"role": "tool", "tool_name": name,
                                 "content": result.output if result.ok else f"ERROR: {result.output}"}
                     messages.append(tool_msg)
@@ -175,6 +214,17 @@ class AetherAgent:
             yield ev(EventType.STATUS, state=AgentState.IDLE)
             yield ev(EventType.DONE, answer=answer, run_id=run_id, stats=stats.to_dict())
 
+            if self.after_turn is not None:
+                # Runs after `done`, so the answer is never delayed by memory upkeep.
+                try:
+                    learned = await self.after_turn(goal, answer, model)
+                except Exception:
+                    learned = []
+                if learned:
+                    yield ev(EventType.MEMORY, saved=[{"id": f.get("id"), "text": f.get("text"),
+                                                       "category": f.get("category")}
+                                                      for f in learned])
+
         except OllamaError as e:
             yield ev(EventType.STATUS, state=AgentState.IDLE)
             yield ev(EventType.ERROR, message=e.message, hint=e.hint)
@@ -188,6 +238,44 @@ class AetherAgent:
             self.broker.cancel_run(run_id)
 
     # --------------------------------------------------------------- helpers
+    async def _until_settled(self, stream: AsyncIterator[ChatDelta],
+                             have_calls: Callable[[], bool]) -> AsyncIterator[ChatDelta]:
+        """Relay a model stream, but once tool calls have arrived, give up waiting after
+        `tool_call_grace_s` of silence. Closing the stream also makes Ollama stop generating."""
+        it = stream.__aiter__()
+        try:
+            while True:
+                try:
+                    if have_calls():
+                        d = await asyncio.wait_for(it.__anext__(), self.settings.tool_call_grace_s)
+                    else:
+                        d = await it.__anext__()
+                except (StopAsyncIteration, asyncio.TimeoutError):
+                    return
+                yield d
+        finally:
+            aclose = getattr(stream, "aclose", None)
+            if aclose is not None:
+                with contextlib.suppress(Exception):
+                    await aclose()
+
+    @staticmethod
+    def _nudge(answer: str, unresolved: dict[str, str], known: set[str]) -> tuple[str, str] | None:
+        """(note for the user, message for the model) when a final answer shouldn't stand yet."""
+        if unresolved:
+            name, error = next(iter(unresolved.items()))
+            return (f"{name} failed and wasn't fixed, so I'm asking the model to correct it.",
+                    f"Your {name} call failed: {error[:400]} Fix the arguments and call {name} "
+                    "again now. Only if it truly can't work, tell the user plainly that it failed. "
+                    "Never say it succeeded.")
+        promised = [t for t in known if t in answer]
+        if promised and PROMISE_RE.search(answer):
+            tool = promised[0]
+            return (f"The model announced {tool} without calling it, so I'm asking it to call it.",
+                    f"You said you would use {tool} but didn't call it. Call it now. Otherwise "
+                    "give your final answer without promising future actions.")
+        return None
+
     @staticmethod
     def _normalize_call(call: dict[str, Any]) -> tuple[str, dict[str, Any], str | None]:
         fn = call.get("function") or {}
@@ -248,7 +336,7 @@ class AetherAgent:
             if not decision.approved:
                 why = f" Reason: {decision.reason}" if decision.reason else ""
                 result = ToolResult(False, f"The user DENIED running {name}.{why} "
-                                           "Don't try it again; suggest another way.")
+                                           "Don't try it again; suggest another way.", denied=True)
                 yield ev(EventType.TOOL_RESULT, call_id=call_id, name=name, ok=False,
                          output=result.output, duration_s=0.0, denied=True)
                 out.append(result)
