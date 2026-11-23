@@ -3,8 +3,8 @@
 /** Chat messages: user bubbles, and assistant replies with their live agent trace. */
 import clsx from "clsx";
 import { motion } from "framer-motion";
-import { AlertTriangle, Brain, Download, FileText, Square, Volume2 } from "lucide-react";
-import { memo } from "react";
+import { AlertTriangle, Brain, Cpu, Download, FileText, Square, Volume2 } from "lucide-react";
+import { memo, useContext } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
@@ -16,7 +16,7 @@ import type { AssistantMessage, Message } from "@/lib/types";
 
 import { QuizDeck } from "./QuizDeck";
 import { useLandingId } from "./SendFlight";
-import { FeedbackRow } from "./Feedback";
+import { CLOUD_BLOCKED, FeedbackContext, FeedbackRow } from "./Feedback";
 import { GpuLive } from "./GpuLive";
 import { TelemetryChip } from "./Telemetry";
 import { ThoughtLine, ToolPill } from "./ToolPill";
@@ -118,6 +118,7 @@ function FileChips({ files }: { files: string[] }) {
 }
 
 function AssistantBubble({ m, turn }: { m: AssistantMessage; turn: number }) {
+  const { switchToFree } = useContext(FeedbackContext);
   const streaming = m.status === "streaming";
   const quizzes = quizIds(m);
   // Small models often repeat the quiz as text even though the cards show it: keep it short.
@@ -158,6 +159,12 @@ function AssistantBubble({ m, turn }: { m: AssistantMessage; turn: number }) {
         <div className="rounded-3xl border border-coral/30 bg-coral/[0.08] px-5 py-4 text-sm">
           <div className="flex items-center gap-2 font-medium text-coral"><AlertTriangle className="size-4" />{m.error.message}</div>
           {m.error.hint && <div className="mt-1.5 font-mono text-xs text-frost/80">→ {m.error.hint}</div>}
+          {CLOUD_BLOCKED.test(m.error.message) && switchToFree && (
+            <button type="button" onClick={() => switchToFree(turn)}
+              className="mt-3 inline-flex items-center gap-1.5 rounded-full border border-seafoam/30 bg-seafoam/[0.08] px-3 py-1 text-xs text-seafoam transition-colors hover:bg-seafoam/[0.15]">
+              <Cpu className="size-3.5" /> Switch to a free model &amp; ask again
+            </button>
+          )}
         </div>
       )}
       {m.learned && m.learned.length > 0 && (

@@ -8,7 +8,8 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { api } from "@/lib/api";
+import { cloudProvider, remoteHost } from "@/lib/cloud";
+import { api, ApiError } from "@/lib/api";
 import { ArtifactContext } from "@/lib/artifacts";
 import { jelly, popIn } from "@/lib/motion";
 import { usePrefs } from "@/lib/prefs";
@@ -117,6 +118,15 @@ function EmptyState({ state, onPick, level }: { state: AgentState; onPick: (t: s
   );
 }
 
+/** The line under the composer: where the current model actually runs. */
+function runsOn(model?: string | null): string {
+  const cloud = cloudProvider(model);
+  if (cloud) return `Runs on ${cloud} in the cloud: your messages go there`;
+  const host = remoteHost(model);
+  if (host) return `Runs on ${host} over your own network`;
+  return "Runs locally on Ollama";
+}
+
 export function AetherApp() {
   const { prefs, setPref, parallax } = usePrefs();
   const [health, setHealth] = useState<Health | null>(null);
@@ -200,6 +210,22 @@ export function AetherApp() {
   const feedbackCtx = {
     sessionId: agent.sessionId,
     rate: agent.rate,
+    // A cloud model failed on billing / quota / setup: switch to a free model on this Mac and ask again.
+    switchToFree: async (turn: number) => {
+      try {
+        const list = await api.models();
+        const local = list.models.filter((n) => !/embed|bge-|minilm|rerank/i.test(n));
+        const pick = local.includes("qwen2.5:7b") ? "qwen2.5:7b" : local[0];
+        if (!pick) { toast("No local model to switch to", "Install one with: ollama pull qwen2.5:7b"); return; }
+        await api.setModel(pick);
+        setHealth((h) => (h ? { ...h, model: pick, model_note: null, cloud: false, provider: null } : h));
+        void loadHealth();
+        toast("Switched to a free model", `${pick} runs on this Mac. Asking again…`);
+        feedbackCtx.retry(turn);
+      } catch (e) {
+        toast(e instanceof ApiError ? e.message : "Couldn't switch models", e instanceof ApiError ? e.hint : undefined);
+      }
+    },
     retry: (turn: number) => {
       if (agent.busy) return;
       const at = agent.messages.findIndex((m) => replyIndex.get(m.id) === turn && m.role === "assistant");
@@ -348,7 +374,7 @@ export function AetherApp() {
                 indexing={files.indexing || files.uploading}
                 onAttach={(f) => void files.add(f)} onRemoveAttachment={files.remove} onRemoveImage={files.removeImage} />
               <p className="mt-2 text-center text-[11px] text-mist/75">
-                Runs locally on Ollama · risky actions always ask first
+                {runsOn(health?.model)} · risky actions always ask first
               </p>
             </div>
           </div>

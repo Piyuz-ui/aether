@@ -15,8 +15,17 @@ import type { AssistantMessage, Feedback as Rating } from "@/lib/types";
 
 export const FEEDBACK_REPLIES = 3; // ask about the first this-many replies of a chat
 
-type Ctx = { sessionId: string | null; retry: (turn: number) => void; rate: (id: string, f: Rating) => void };
+type Ctx = {
+  sessionId: string | null;
+  retry: (turn: number) => void;
+  rate: (id: string, f: Rating) => void;
+  /** Switch to a free local model, then ask that reply's question again. */
+  switchToFree?: (turn: number) => void;
+};
 export const FeedbackContext = createContext<Ctx>({ sessionId: null, retry: () => {}, rate: () => {} });
+
+/** Cloud errors a free local model gets you past: no credit, quota/rate limit, key or setup problems. */
+export const CLOUD_BLOCKED = /no credit left|rate limit or free quota|rejected the API key|isn't set up yet/i;
 
 const REASONS = ["Wrong answer", "Too slow", "Didn't use a tool", "Misunderstood me"];
 
