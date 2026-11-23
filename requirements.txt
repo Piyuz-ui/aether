@@ -1,0 +1,7 @@
+requests>=2.31
+rich>=13.7
+pypdf>=4.0
+beautifulsoup4>=4.12
+ddgs>=9.0
+streamlit>=1.40
+pytest>=8.0
