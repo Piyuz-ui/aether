@@ -12,6 +12,7 @@ import streamlit as st  # noqa: E402
 from agent import Agent, Settings  # noqa: E402
 from agent.config import DOCS_DIR  # noqa: E402
 from agent.storage import get_store  # noqa: E402
+from agent.tools.personal import note_path  # noqa: E402
 
 settings = Settings()
 st.set_page_config(page_title=f"{settings.agent_name} · local AI agent", page_icon="🤖",
@@ -70,6 +71,18 @@ with st.sidebar:
             store.set_task_done(t["id"])
             st.rerun()
 
+    st.subheader("📝 Notes")
+    notes = store.recent_notes(50)
+    if not notes:
+        st.caption("No notes yet. Try: “Make notes from my PDF”.")
+    for n in notes:
+        with st.expander(f"#{n['id']} {n['title']}"):
+            st.caption(n["created"])
+            st.markdown(n["body"])
+            st.download_button("⬇️ Download .md", f"# {n['title']}\n\n{n['body']}\n",
+                               file_name=note_path(n["id"], n["title"]).name,
+                               key=f"dl-{n['id']}", use_container_width=True)
+
     with st.expander("🧠 Memory"):
         for m in agent.memory.all():
             st.write(f"#{m['id']} {m['text']}")
@@ -85,6 +98,18 @@ def render_tools(tool_log: list[dict]) -> None:
             st.code(item.get("result", "")[:1500], language=None)
 
 
+def render_notes(notes: list[dict], reply: str) -> None:
+    for n in notes:
+        if f"Saved as note #{n['id']}" in reply:
+            continue  # the reply already contains the full note text
+        with st.container(border=True):
+            st.markdown(f"#### 📝 {n['title']}")
+            st.markdown(n["body"])
+            st.download_button("⬇️ Download .md", f"# {n['title']}\n\n{n['body']}\n",
+                               file_name=note_path(n["id"], n["title"]).name,
+                               key=f"chat-dl-{n['id']}-{len(state.messages)}")
+
+
 if not state.messages:
     st.markdown(f"### Hi! I'm {settings.agent_name}.\n"
                 "I can **study** with your PDFs, track **tasks & deadlines**, "
@@ -94,6 +119,7 @@ for msg in state.messages:
     with st.chat_message(msg["role"]):
         render_tools(msg.get("tools", []))
         st.markdown(msg["content"])
+        render_notes(msg.get("notes", []), msg["content"])
 
 if prompt := st.chat_input(f"Message {settings.agent_name}…"):
     state.messages.append({"role": "user", "content": prompt})
@@ -115,5 +141,7 @@ if prompt := st.chat_input(f"Message {settings.agent_name}…"):
             status.update(label="Done", state="complete")
         render_tools(tool_log)
         st.markdown(reply)
-    state.messages.append({"role": "assistant", "content": reply, "tools": tool_log})
+        render_notes(agent.last_notes, reply)
+    state.messages.append({"role": "assistant", "content": reply, "tools": tool_log,
+                           "notes": agent.last_notes})
     st.rerun()

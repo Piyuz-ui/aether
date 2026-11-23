@@ -13,3 +13,4 @@ workspace/*
 # Local tool links created by Streamlit (point into .venv)
 .agents/
 .claude/
+notes/*

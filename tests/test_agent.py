@@ -4,7 +4,7 @@ import tempfile
 
 # Keep test data out of the real data/, documents/ and workspace/ folders.
 _tmp = tempfile.mkdtemp()
-for var in ("AGENT_DATA_DIR", "AGENT_DOCS_DIR", "AGENT_WORKSPACE_DIR"):
+for var in ("AGENT_DATA_DIR", "AGENT_DOCS_DIR", "AGENT_WORKSPACE_DIR", "AGENT_NOTES_DIR"):
     os.environ[var] = os.path.join(_tmp, var.lower())
 
 from agent import Agent, Settings  # noqa: E402
@@ -97,3 +97,21 @@ def test_history_is_carried_between_turns():
     agent.chat("second")
     contents = [m["content"] for m in llm.seen[-1]]
     assert "first" in contents and "one" in contents
+
+
+def test_save_note_writes_markdown_file_and_is_reported():
+    agent = make_agent([call("save_note", title="Paging", body="Paging splits memory."),
+                        say("Saved.")])
+    agent.chat("make notes on paging")
+    assert [n["title"] for n in agent.last_notes] == ["Paging"]
+    from agent.config import NOTES_DIR
+    files = list(NOTES_DIR.glob("*-paging.md"))
+    assert files and "Paging splits memory." in files[0].read_text()
+
+
+def test_notes_written_in_reply_are_saved_automatically():
+    notes = "# Deadlock\n\n" + "Four conditions: mutual exclusion, hold and wait... " * 10
+    agent = make_agent([say(notes + "\nThe notes have been saved in the following location: /fake")])
+    reply = agent.chat("make notes of my OS pdf")
+    assert agent.last_notes and agent.last_notes[0]["title"] == "Deadlock"
+    assert "/fake" not in reply and "Saved as note #" in reply

@@ -1,8 +1,11 @@
 """Personal assistant tools: time, tasks/deadlines/reminders, notes, long-term memory."""
 from __future__ import annotations
 
+import re
 from datetime import datetime
+from pathlib import Path
 
+from ..config import NOTES_DIR
 from ..storage import get_store
 from .base import CONTEXT, tool
 
@@ -53,10 +56,27 @@ def delete_task(task_id: int) -> str:
     return f"Deleted #{task_id}." if get_store().delete_task(task_id) else f"No task #{task_id}."
 
 
-@tool("Save a note (lecture notes, ideas, summaries) for later.",
-      params={"title": "Short title", "body": "The note content"}, category="personal")
+def note_path(note_id: int, title: str) -> Path:
+    slug = re.sub(r"[^a-z0-9]+", "-", title.lower()).strip("-")[:60] or "note"
+    return NOTES_DIR / f"{note_id:03d}-{slug}.md"
+
+
+def export_note(note: dict) -> Path:
+    """Write a note to notes/ as Markdown so the user can open it in any app."""
+    path = note_path(note["id"], note["title"])
+    path.write_text(f"# {note['title']}\n\n_{note['created']}_\n\n{note['body']}\n")
+    return path
+
+
+@tool("Save a note (study notes, lecture notes, ideas, summaries). It is stored in the app "
+      "and as a Markdown file the user can open.",
+      params={"title": "Short title", "body": "The full note content in Markdown"},
+      category="personal")
 def save_note(title: str, body: str) -> str:
-    return f"Saved note #{get_store().add_note(title, body)}: {title}"
+    store = get_store()
+    note_id = store.add_note(title, body)
+    note = store.query("SELECT * FROM notes WHERE id = ?", (note_id,))[0]
+    return f"Saved note #{note_id} '{title}' to {export_note(note)}"
 
 
 @tool("Search the user's saved notes AND their study documents. "

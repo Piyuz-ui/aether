@@ -116,6 +116,10 @@ class CLI:
                 self.status = None
             console.print(f"\n[bold blue]{self.agent.settings.agent_name} ›[/]")
             console.print(Markdown(reply))
+            for n in self.agent.last_notes:
+                if f"Saved as note #{n['id']}" not in reply:
+                    console.print(Panel(Markdown(n["body"]), title=f"📝 {n['title']}",
+                                        border_style="green"))
         console.print("\nBye! 👋")
 
 

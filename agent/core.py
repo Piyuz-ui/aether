@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import re
 from datetime import date, datetime, timedelta
 from typing import Callable
 
@@ -9,8 +10,16 @@ from .config import DOCS_DIR, ROOT, WORKSPACE_DIR, Settings
 from .llm import OllamaClient, OllamaError, strip_thinking
 from .memory import Memory
 from .tools import CONTEXT, REGISTRY, coerce_args
+from .storage import get_store
+from .tools.personal import export_note
+from .tools.study import _documents
 
 MAX_TOOL_OUTPUT = 12000
+NOTE_ID_RE = re.compile(r"Saved note #(\d+)")
+NOTES_REQUEST_RE = re.compile(r"\bnotes?\b", re.IGNORECASE)
+# A trailing "the notes have been saved in …" line the model may invent.
+SAVED_CLAIM_RE = re.compile(r"^.*\b(saved|stored)\b.*(location|folder|file|path|at|in)\b.*$",
+                            re.IGNORECASE | re.MULTILINE)
 
 # confirm(tool_name, args) -> bool    | asked before any "dangerous" tool runs
 ConfirmFn = Callable[[str, dict], bool]
@@ -32,6 +41,13 @@ How to work:
 - For multi-step jobs, take one step at a time and check each tool result before the next step.
 - When the user shares a lasting fact or preference about themselves, save it with `remember`.
 - When answering from documents, cite the file and page. When answering from the web, cite URLs.
+- To make notes from a document: read ALL of it first (every page), then write proper study notes
+  in Markdown: headings, key definitions, formulas, short examples, and a "Likely exam questions"
+  section at the end. Put the COMPLETE notes in the body of ONE save_note call. Once it succeeds,
+  reply in one or two short lines: the app shows the saved note to the user automatically,
+  so don't repeat the notes in your reply.
+- Never claim you saved, wrote or ran anything unless a tool result confirmed it.
+- Write formulas in plain text or `code`, e.g. `x_new = (x - min) / (max - min)`, not LaTeX.
 - For a quiz: read the material first, ask ONE question at a time, wait for the answer, then give feedback.
 - Convert relative dates ("next Friday") to YYYY-MM-DD by looking them up in the calendar above.
 - "My notes", "my PDF", "my slides" usually mean files in the documents folder: use search_documents /
@@ -41,6 +57,9 @@ How to work:
   server; it would block for 120 s. Instead tell the user the exact command to run in a new terminal
   tab. Your own web UI starts with: cd "{project}" && source .venv/bin/activate && python main.py web
 - Be concise and friendly. Use Markdown for lists and code.
+
+Documents the user has uploaded (newest first; "the document/PDF I uploaded" means the first one):
+{documents}
 {memories}"""
 
 
@@ -49,6 +68,17 @@ def _calendar(days: int = 21) -> str:
     today = date.today()
     return ", ".join(f"{(today + timedelta(d)).strftime('%a')} {(today + timedelta(d)).isoformat()}"
                      + (" (today)" if d == 0 else "") for d in range(days))
+
+
+def _document_list(limit: int = 15) -> str:
+    docs = sorted(_documents(), key=lambda p: p.stat().st_mtime, reverse=True)
+    if not docs:
+        return "(none yet)"
+    lines = [f"- {p.name} (added {datetime.fromtimestamp(p.stat().st_mtime):%d %b %H:%M})"
+             for p in docs[:limit]]
+    if len(docs) > limit:
+        lines.append(f"- …and {len(docs) - limit} more (use list_documents)")
+    return "\n".join(lines)
 
 
 class Agent:
@@ -65,6 +95,7 @@ class Agent:
         self.confirm = confirm or (lambda name, args: False)  # safe default: deny
         self.on_event = on_event or (lambda kind, payload: None)
         self.turns: list[list[dict]] = []  # each turn = user msg + tool msgs + reply
+        self.last_notes: list[dict] = []   # notes saved during the latest turn
 
     # ---------------------------------------------------------------- helpers
     @property
@@ -93,6 +124,7 @@ class Agent:
             user_line=f" You work for {s.user_name}." if s.user_name else "",
             now=datetime.now().strftime("%A %d %B %Y, %H:%M"),
             calendar=_calendar(),
+            documents=_document_list(),
             docs=DOCS_DIR, workspace=WORKSPACE_DIR, project=ROOT, memories=memories)}
 
     def _run_tool(self, name: str, raw_args) -> str:
@@ -153,6 +185,25 @@ class Agent:
         else:
             reply = "I ran out of steps before finishing. Tell me to continue, or break the task up."
 
+        reply = self._collect_notes(user_text, turn, reply)
         turn.append({"role": "assistant", "content": reply})
         self.turns.append(turn)
+        return reply
+
+    def _collect_notes(self, user_text: str, turn: list[dict], reply: str) -> str:
+        """Record notes saved this turn (interfaces display them). If the user asked for
+        notes and the model wrote them in its reply but forgot to save, save them for it."""
+        store = get_store()
+        ids = [int(m.group(1)) for msg in turn if msg.get("tool_name") == "save_note"
+               for m in [NOTE_ID_RE.search(msg["content"])] if m]
+        if not ids and NOTES_REQUEST_RE.search(user_text) and len(reply) > 400:
+            heading = re.search(r"^#+\s*(.+)$", reply, re.MULTILINE)
+            title = (heading.group(1) if heading else user_text)[:80].strip()
+            body = SAVED_CLAIM_RE.sub("", reply).strip()
+            note_id = store.add_note(title, body)
+            ids.append(note_id)
+            path = export_note(store.query("SELECT * FROM notes WHERE id = ?", (note_id,))[0])
+            reply = f"{body}\n\n_📝 Saved as note #{note_id} → `{path}`_"
+        self.last_notes = [n for i in ids
+                           for n in store.query("SELECT * FROM notes WHERE id = ?", (i,))]
         return reply

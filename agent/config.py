@@ -27,7 +27,9 @@ DATA_DIR = Path(os.getenv("AGENT_DATA_DIR", ROOT / "data")).expanduser()
 DOCS_DIR = Path(os.getenv("AGENT_DOCS_DIR", ROOT / "documents")).expanduser()
 WORKSPACE_DIR = Path(os.getenv("AGENT_WORKSPACE_DIR", ROOT / "workspace")).expanduser()
 
-for _d in (DATA_DIR, DOCS_DIR, WORKSPACE_DIR):
+NOTES_DIR = Path(os.getenv("AGENT_NOTES_DIR", ROOT / "notes")).expanduser()
+
+for _d in (DATA_DIR, DOCS_DIR, WORKSPACE_DIR, NOTES_DIR):
     _d.mkdir(parents=True, exist_ok=True)
 
 
