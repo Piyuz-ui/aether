@@ -24,7 +24,7 @@
 
 | Time | On screen | Voice-over / caption |
 |---|---|---|
-| **0:00–0:06** | Empty state. The symbiote breathes; move the cursor slowly near it: it reaches a pseudopod toward the cursor while the light drifts (parallax). | *"This is AETHER: an AI agent that runs entirely on my laptop. No cloud, no API keys."* |
+| **0:00–0:06** | Empty state. The symbiote breathes; move the cursor slowly so the light drifts (parallax). | *"This is AETHER: an AI agent that runs entirely on my laptop. No cloud, no API keys."* |
 | **0:06–0:20** | Drag `timetable.png` onto the chat. Type **"Save my classes."** Send. The pill flips to *"Looking at your image with qwen3.5:4b"*, then three `add_class` pills tick ✓. The Tasks panel fills with classes. | *"I drop in a screenshot of my timetable. It switches to a vision model, reads it, and calls a tool for every class. Look, they're in my planner now."* |
 | **0:20–0:34** | Type **"Quiz me on my uploaded notes."** The `search_knowledge_base` pill appears, then glass quiz cards. Answer one wrong (coral shake), then one right (seafoam glow). | *"It searches my own lecture notes and turns them into an interactive quiz. Get one wrong and it remembers that topic as a weak spot."* |
 | **0:34–0:46** | Type **"Research what's new in Python 3.15 and save a note with sources."** Pills: `web_search` → `read_webpage` → `write_note`. Click **Open**: the preview slides in with the cited note. | *"Multi-step research: it searches, reads the sources, writes a cited note, and I can preview it right here."* |

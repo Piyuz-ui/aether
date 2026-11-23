@@ -4,8 +4,7 @@
  * AETHER's living symbiote: a procedural, amoeba-like organism whose body language follows
  * what the agent is doing.
  *
- *   idle               slow breathing; one lazy pseudopod drifts around (and, on the big hero
- *                      version, curiously reaches toward your cursor)
+ *   idle               slow breathing; one lazy pseudopod drifts around
  *   thinking           faster wobble, three tendrils probing, the nucleus swirls
  *   using_tool         one long pseudopod stretches out to grab the tool, with a pulse along it
  *   awaiting_approval  tendrils pulled in, the body contracts and turns amber, an attention ripple
@@ -98,23 +97,6 @@ export function AgentOrb({ state, size = 44, level }: {
   const levelRef = useRef(level);
   levelRef.current = level;
   const params = useRef<Params>({ ...TARGETS[state], colors: TARGETS[state].colors.map((c) => [...c]) as Params["colors"] });
-  const pointer = useRef<{ angle: number; near: number }>({ angle: 0, near: 0 });
-  const curious = size >= 80; // only the big hero symbiote follows the cursor
-
-  // Curiosity: the hero symbiote notices the cursor and reaches toward it.
-  useEffect(() => {
-    if (!curious || prefs.calm) return;
-    const onMove = (e: PointerEvent) => {
-      const el = svgRef.current;
-      if (!el) return;
-      const r = el.getBoundingClientRect();
-      const dx = e.clientX - (r.left + r.width / 2), dy = e.clientY - (r.top + r.height / 2);
-      const dist = Math.hypot(dx, dy);
-      pointer.current = { angle: Math.atan2(dy, dx), near: Math.max(0, 1 - dist / (size * 3.2)) };
-    };
-    window.addEventListener("pointermove", onMove, { passive: true });
-    return () => window.removeEventListener("pointermove", onMove);
-  }, [curious, prefs.calm, size]);
 
   useEffect(() => {
     const xs = new Array<number>(N), ys = new Array<number>(N);
@@ -154,10 +136,6 @@ export function AgentOrb({ state, size = 44, level }: {
       }
       if (p.reach > 0.01) { // the tool-grabbing arm, aimed up-right, with a pulse travelling out
         pods.push({ a: -0.55 + 0.12 * Math.sin(t * 0.9), e: p.reach * (0.88 + 0.12 * Math.sin(t * 4.2)), w: 0.16 });
-      }
-      const cur = pointer.current;
-      if (curious && cur.near > 0.02 && stateRef.current === "idle") {
-        pods.push({ a: cur.angle, e: 0.55 * cur.near, w: 0.22 });
       }
 
       for (let i = 0; i < N; i++) {
@@ -227,7 +205,7 @@ export function AgentOrb({ state, size = 44, level }: {
     return () => cancelAnimationFrame(raf);
   // Redraw a still frame in calm mode whenever the state changes.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [prefs.calm, prefs.calm ? state : null, curious]);
+  }, [prefs.calm, prefs.calm ? state : null]);
 
   const view = 124; // room for tendrils beyond the body
   const g = `sym-${uid}`;
