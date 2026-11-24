@@ -1,10 +1,16 @@
 "use client";
 
-/** Model switcher, system health, motion, voice and reminder settings. */
+/**
+ * Settings, in four sections with a switcher on top:
+ *   Model        which brain answers, health, cloud brains
+ *   Connections  MCP servers, GPU computers on your network and their hardware
+ *   Voice        AETHER's voice and talking to AETHER
+ *   General      calm mode and reminders
+ */
 import clsx from "clsx";
-import { motion } from "framer-motion";
-import { AudioLines, CalendarDays, Cloud, Cpu, Database, ExternalLink, KeyRound, RefreshCw, Trash2, Volume2 } from "lucide-react";
-import { useState } from "react";
+import { AnimatePresence, motion } from "framer-motion";
+import { AudioLines, CalendarDays, Cloud, Cpu, Database, ExternalLink, KeyRound, Plug, RefreshCw, SlidersHorizontal, Trash2, Volume2, type LucideIcon } from "lucide-react";
+import { useEffect, useState } from "react";
 
 import { api, ApiError } from "@/lib/api";
 import { jelly } from "@/lib/motion";
@@ -197,6 +203,38 @@ function CloudSection({ revision, onChanged, toast }: {
 }
 
 
+type SectionId = "model" | "connections" | "voice" | "general";
+const SECTIONS: { id: SectionId; label: string; icon: LucideIcon; blurb: string }[] = [
+  { id: "model", label: "Model", icon: Cpu, blurb: "Which brain answers, its health, and optional cloud brains." },
+  { id: "connections", label: "Connect", icon: Plug, blurb: "MCP servers, GPU computers on your network and their hardware." },
+  { id: "voice", label: "Voice", icon: AudioLines, blurb: "How AETHER sounds, and talking to it." },
+  { id: "general", label: "General", icon: SlidersHorizontal, blurb: "Motion and deadline reminders." },
+];
+const SECTION_KEY = "aether-settings-section";
+
+/** The section switcher: stays at the top while the section scrolls under it. */
+function SectionNav({ value, onChange }: { value: SectionId; onChange: (s: SectionId) => void }) {
+  return (
+    <div className="sticky -top-2 z-10 -mx-4 mb-5 bg-gradient-to-b from-abyss-900/95 via-abyss-900/85 to-transparent px-4 pb-3 pt-2 backdrop-blur-sm">
+      <nav className="relative grid grid-cols-4 gap-0.5 rounded-2xl bg-abyss-950/45 p-1" role="tablist" aria-label="Settings sections">
+        {SECTIONS.map((s) => (
+          <button key={s.id} type="button" role="tab" aria-selected={value === s.id} onClick={() => onChange(s.id)}
+            className={clsx("relative flex items-center justify-center gap-1.5 rounded-xl px-1.5 py-2 text-[12px] font-medium transition-colors",
+              value === s.id ? "text-frost" : "text-mist hover:text-frost")}>
+            {value === s.id && (
+              <motion.span layoutId="settings-section" transition={jelly}
+                className="absolute inset-0 rounded-xl bg-white/[0.08] shadow-[inset_0_1px_0_rgba(224,242,254,0.18),inset_0_0_0_1px_rgba(125,211,252,0.18)]" />
+            )}
+            <s.icon className="relative size-3.5" />
+            <span className="relative">{s.label}</span>
+          </button>
+        ))}
+      </nav>
+      <p className="mt-2 px-1 text-[11.5px] text-mist">{SECTIONS.find((s) => s.id === value)?.blurb}</p>
+    </div>
+  );
+}
+
 export function SettingsPanel({ health, onHealthChange, revision, toast }: {
   health: Health | null;
   onHealthChange: () => void;
@@ -208,6 +246,17 @@ export function SettingsPanel({ health, onHealthChange, revision, toast }: {
   const [switching, setSwitching] = useState(false);
   const [err, setErr] = useState<ApiError | null>(null);
   const voiceOk = typeof window !== "undefined" && speechSupported();
+  const [section, setSection] = useState<SectionId>("model");
+  useEffect(() => {  // reopen the section you were last in (read after mount: no hydration mismatch)
+    try {
+      const saved = window.localStorage.getItem(SECTION_KEY) as SectionId | null;
+      if (saved && SECTIONS.some((s) => s.id === saved)) setSection(saved);
+    } catch { /* storage blocked */ }
+  }, []);
+  const pick = (s: SectionId) => {
+    setSection(s);
+    try { window.localStorage.setItem(SECTION_KEY, s); } catch { /* storage blocked */ }
+  };
 
   async function choose(model: string) {
     setSwitching(true);
@@ -223,8 +272,7 @@ export function SettingsPanel({ health, onHealthChange, revision, toast }: {
     }
   }
 
-  return (
-    <div className="space-y-6">
+  const brain = (
       <section>
         <PanelTitle title="Brain" hint="Any Ollama model that supports tool calling, or a cloud brain you've connected below."
           action={<JiggleButton tone="ghost" className="px-2 py-1" aria-label="Refresh" onClick={() => { void models.reload(); onHealthChange(); }}>
@@ -267,20 +315,17 @@ export function SettingsPanel({ health, onHealthChange, revision, toast }: {
         </div>
       </section>
 
-      <CloudSection revision={revision} toast={toast} onChanged={() => { void models.reload(); onHealthChange(); }} />
+  );
+  const refresh = () => { void models.reload(); onHealthChange(); };
 
+  const content: Record<SectionId, React.ReactNode> = {
+    model: <>{brain}<CloudSection revision={revision} toast={toast} onChanged={refresh} /></>,
+    connections: <>
       <McpSection revision={revision} toast={toast} />
-
-      <section>
-        <PanelTitle title="Feel" />
-        <div className="glass-inset rounded-2xl p-1">
-          <Toggle checked={prefs.calm} onChange={(v) => setPref("calm", v)} label="Calm mode"
-            hint="Reduced motion: no drifting light, parallax or wobble." />
-        </div>
-      </section>
-
+      <NetworkGroup revision={revision} toast={toast} onChanged={refresh} />
+    </>,
+    voice: <>
       <NeuralVoiceSection />
-
       <section>
         <PanelTitle title="Talking to AETHER" hint={voiceOk
           ? "Speech recognition is provided by your browser. Chrome uses Google's servers; Safari can work on-device."
@@ -289,6 +334,15 @@ export function SettingsPanel({ health, onHealthChange, revision, toast }: {
           <Toggle checked={prefs.autoSendVoice} onChange={(v) => setPref("autoSendVoice", v)} label="Send when I stop talking" />
           <Toggle checked={prefs.wakeWord} onChange={(v) => setPref("wakeWord", v && voiceOk)} label="“Hey Aether” wake word"
             hint="Listens while this tab is open. Say “Hey Aether, …”." />
+        </div>
+      </section>
+    </>,
+    general: <>
+      <section>
+        <PanelTitle title="Feel" />
+        <div className="glass-inset rounded-2xl p-1">
+          <Toggle checked={prefs.calm} onChange={(v) => setPref("calm", v)} label="Calm mode"
+            hint="Reduced motion: no drifting light, parallax or wobble." />
         </div>
       </section>
 
@@ -310,8 +364,18 @@ export function SettingsPanel({ health, onHealthChange, revision, toast }: {
           <CalendarDays className="size-4" /> Export deadlines to your calendar (.ics)
         </a>
       </section>
+    </>,
+  };
 
-      <NetworkGroup revision={revision} toast={toast} onChanged={() => { void models.reload(); onHealthChange(); }} />
+  return (
+    <div>
+      <SectionNav value={section} onChange={pick} />
+      <AnimatePresence mode="wait" initial={false}>
+        <motion.div key={section} className="space-y-6"
+          initial={{ opacity: 0, x: 10 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -10 }} transition={{ duration: 0.16 }}>
+          {content[section]}
+        </motion.div>
+      </AnimatePresence>
     </div>
   );
 }
