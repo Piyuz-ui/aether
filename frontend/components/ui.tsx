@@ -2,10 +2,11 @@
 
 /** Small tactile building blocks: jiggly buttons, tilt cards, chips, toggles. */
 import clsx from "clsx";
-import { AnimatePresence, motion, useMotionValue, useSpring, useTransform, type HTMLMotionProps } from "framer-motion";
+import { AnimatePresence, motion, useMotionTemplate, useMotionValue, useSpring, useTransform, type HTMLMotionProps } from "framer-motion";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 
-import { jelly } from "@/lib/motion";
+import { jelly, tilt } from "@/lib/motion";
+import { usePrefs } from "@/lib/prefs";
 
 type Tone = "glass" | "primary" | "danger" | "approve" | "ghost";
 
@@ -119,32 +120,55 @@ export function IconButton({
 }
 
 /** A card that tilts toward the cursor in 3D, then floats back on a spring. */
+/**
+ * A card that tilts toward the cursor in 3D, lifts a touch, and catches a soft light that
+ * follows the pointer. `radius` matches the child's corners so the light stays inside them.
+ * Calm mode: a plain, still wrapper.
+ */
 export function TiltCard({
   className,
   children,
   intensity = 6,
+  radius = "rounded-3xl",
+  sheen = true,
+  disabled = false,
   ...rest
-}: HTMLMotionProps<"div"> & { intensity?: number; children?: ReactNode }) {
+}: HTMLMotionProps<"div"> & { intensity?: number; radius?: string; sheen?: boolean; disabled?: boolean; children?: ReactNode }) {
+  const { prefs } = usePrefs();
   const mx = useMotionValue(0);
   const my = useMotionValue(0);
-  const rx = useSpring(useTransform(my, [-0.5, 0.5], [intensity, -intensity]), jelly);
-  const ry = useSpring(useTransform(mx, [-0.5, 0.5], [-intensity, intensity]), jelly);
+  const hover = useSpring(0, tilt);
+  const rx = useSpring(useTransform(my, [-0.5, 0.5], [intensity, -intensity]), tilt);
+  const ry = useSpring(useTransform(mx, [-0.5, 0.5], [-intensity, intensity]), tilt);
+  const scale = useTransform(hover, [0, 1], [1, 1 + intensity * 0.0018]);
+  const lx = useTransform(mx, (v) => `${(v + 0.5) * 100}%`);
+  const ly = useTransform(my, (v) => `${(v + 0.5) * 100}%`);
+  const light = useMotionTemplate`radial-gradient(260px circle at ${lx} ${ly}, rgba(224,242,254,0.13), rgba(125,211,252,0.05) 40%, transparent 70%)`;
+  useEffect(() => { if (disabled) { mx.set(0); my.set(0); hover.set(0); } }, [disabled, mx, my, hover]);
+  if (prefs.calm) return <div className={className}>{children}</div>;
   return (
     <motion.div
-      style={{ rotateX: rx, rotateY: ry, transformPerspective: 900 }}
+      style={{ rotateX: rx, rotateY: ry, scale, transformPerspective: 900 }}
       onPointerMove={(e) => {
+        if (disabled) return;
         const r = e.currentTarget.getBoundingClientRect();
         mx.set((e.clientX - r.left) / r.width - 0.5);
         my.set((e.clientY - r.top) / r.height - 0.5);
+        hover.set(1);
       }}
       onPointerLeave={() => {
         mx.set(0);
         my.set(0);
+        hover.set(0);
       }}
-      className={className}
+      className={clsx("relative", className)}
       {...rest}
     >
       {children}
+      {sheen && (
+        <motion.span aria-hidden style={{ backgroundImage: light, opacity: hover }}
+          className={clsx("pointer-events-none absolute inset-0 mix-blend-screen", radius)} />
+      )}
     </motion.div>
   );
 }

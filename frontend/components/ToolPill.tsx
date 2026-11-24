@@ -8,13 +8,13 @@ import {
   FileDown, FileText, FolderOpen, GraduationCap, Plug, Globe, Library, ListChecks, NotebookPen, ShieldAlert, Sparkles, SquareTerminal,
   Terminal, Trash2, Wrench, X, type LucideIcon,
 } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { filesIn, useOpenArtifact } from "@/lib/artifacts";
-import { jelly, popIn } from "@/lib/motion";
+import { depthIn, jelly, popIn } from "@/lib/motion";
 import type { ThoughtStep, ToolStep } from "@/lib/types";
 
-import { Spinner } from "./ui";
+import { Spinner, TiltCard } from "./ui";
 
 const ICONS: Record<string, LucideIcon> = {
   globe: Globe, "file-text": FileText, calculator: Calculator, "notebook-pen": NotebookPen,
@@ -59,9 +59,26 @@ export function ToolPill({ step }: { step: ToolStep }) {
     denied: { tone: "border-coral/30 bg-coral/[0.05]", badge: <Ban className="size-3.5 text-coral" /> },
   }[step.status];
 
+  // A soft flash of light when the result lands (running → ok / error).
+  const [flash, setFlash] = useState(0);
+  const was = useRef(step.status);
+  useEffect(() => {
+    if (was.current === "running" && step.status !== "running") setFlash((n) => n + 1);
+    was.current = step.status;
+  }, [step.status]);
+  const glow = step.status === "ok" ? "rgba(94,234,212,0.55)" : "rgba(253,164,175,0.5)";
+
   return (
-    <motion.div layout variants={popIn} initial="hidden" animate="show" transition={jelly}
-      className={clsx("overflow-hidden border backdrop-blur-md", status.tone, open ? "rounded-2xl" : "rounded-[20px]")}>
+    <TiltCard intensity={3} radius={open ? "rounded-2xl" : "rounded-[20px]"} disabled={open}>
+    <motion.div layout variants={depthIn} initial="hidden" animate="show"
+      className={clsx("relative overflow-hidden border backdrop-blur-md", status.tone, open ? "rounded-2xl" : "rounded-[20px]")}>
+      <AnimatePresence>
+        {flash > 0 && (
+          <motion.span key={flash} aria-hidden className="pointer-events-none absolute inset-0 rounded-[inherit]"
+            initial={{ opacity: 1 }} animate={{ opacity: 0 }} transition={{ duration: 1.1, ease: "easeOut" }}
+            style={{ boxShadow: `inset 0 0 0 1px ${glow}, inset 0 0 22px ${glow}` }} />
+        )}
+      </AnimatePresence>
       <motion.button
         layout="position"
         type="button"
@@ -120,6 +137,7 @@ export function ToolPill({ step }: { step: ToolStep }) {
         )}
       </AnimatePresence>
     </motion.div>
+    </TiltCard>
   );
 }
 

@@ -21,6 +21,7 @@ import { useVoice, type Feeder } from "@/lib/useNeuralVoice";
 import { useWakeWord } from "@/lib/voice";
 
 import { AgentOrb, STATE_LABEL } from "./AgentOrb";
+import { HeroOrb } from "./three";
 import { ApprovalModal } from "./ApprovalModal";
 import { ArtifactPreview } from "./ArtifactPreview";
 import { Composer, type ComposerHandle } from "./Composer";
@@ -136,7 +137,7 @@ function whereItRuns(model?: string | null): string {
 function EmptyState({ state, onPick, level, model }: { state: AgentState; onPick: (t: string) => void; level: MotionValue<number>; model?: string | null }) {
   return (
     <motion.div variants={popIn} initial="hidden" animate="show" className="mx-auto flex max-w-2xl flex-col items-center px-4 pt-[8vh] text-center">
-      <AgentOrb state={state} size={132} level={level} />
+      <HeroOrb state={state} size={132} level={level} />
       <h1 className="mt-10 text-3xl font-semibold tracking-tight text-frost sm:text-4xl">{greeting()}</h1>
       <p className="mt-3 max-w-md text-balance text-[15px] leading-relaxed text-mist">
         I&apos;m AETHER, your local study, research and productivity agent. I can search the web, read your

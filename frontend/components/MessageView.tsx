@@ -11,7 +11,7 @@ import remarkGfm from "remark-gfm";
 import { api } from "@/lib/api";
 import { filesIn, useOpenArtifact } from "@/lib/artifacts";
 import { useVoice } from "@/lib/useNeuralVoice";
-import { jelly, popIn } from "@/lib/motion";
+import { depthIn, jelly, popIn } from "@/lib/motion";
 import type { AssistantMessage, Message } from "@/lib/types";
 
 import { QuizDeck } from "./QuizDeck";
@@ -194,7 +194,7 @@ function AssistantBubble({ m, turn }: { m: AssistantMessage; turn: number }) {
 export function MessageView({ message, turn = 0 }: { message: Message; turn?: number }) {
   const landing = useLandingId();
   return (
-    <motion.div variants={popIn} initial={landing === message.id ? "show" : "hidden"} animate="show" layout="position"
+    <motion.div variants={depthIn} initial={landing === message.id ? "show" : "hidden"} animate="show" layout="position"
       className={clsx("flex w-full", message.role === "user" ? "justify-end" : "justify-start")}>
       {message.role === "user" ? (
         <div className="flex max-w-[85%] flex-col items-end gap-2">

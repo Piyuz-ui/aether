@@ -6,8 +6,10 @@ import { Download, Expand } from "lucide-react";
 import { useState } from "react";
 
 import { API_BASE } from "@/lib/api";
-import { jelly } from "@/lib/motion";
+import { depthIn } from "@/lib/motion";
 import type { ChartArtifact, Step } from "@/lib/types";
+
+import { TiltCard } from "./ui";
 
 /** Every image the tools in a reply produced (live events, or `[artifact]` lines after a reload). */
 export function chartsIn(steps: Step[]): ChartArtifact[] {
@@ -39,7 +41,8 @@ export function ChartCard({ a }: { a: ChartArtifact }) {
   const src = abs(a.url);
   if (failed) return null;
   return (
-    <motion.figure initial={{ opacity: 0, y: 8, scale: 0.98 }} animate={{ opacity: 1, y: 0, scale: 1 }} transition={jelly}
+    <TiltCard intensity={3} radius="rounded-3xl rounded-tl-lg">
+    <motion.figure variants={depthIn} initial="hidden" animate="show"
       className="glass overflow-hidden rounded-3xl rounded-tl-lg">
       <a href={src} target="_blank" rel="noreferrer" className="group relative block bg-white/[0.97]" title="Open full size">
         {/* eslint-disable-next-line @next/next/no-img-element -- served by the local backend, sizes vary */}
@@ -57,5 +60,6 @@ export function ChartCard({ a }: { a: ChartArtifact }) {
         </a>
       </figcaption>
     </motion.figure>
+    </TiltCard>
   );
 }

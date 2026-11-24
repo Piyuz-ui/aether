@@ -8,6 +8,8 @@ import { motion, useTransform } from "framer-motion";
 
 import { usePrefs } from "@/lib/prefs";
 
+import { ParticleField } from "./three";
+
 type Orb = {
   color: string;
   size: string;
@@ -65,6 +67,8 @@ export function Backdrop() {
       {ORBS.map((orb, i) => (
         <OrbLayer key={i} orb={orb} calm={prefs.calm} />
       ))}
+      {/* depth: a faint 3D field of light motes drifting against the cursor */}
+      <ParticleField />
       {/* a soft vignette keeps the edges calm and focuses the centre */}
       <div className="absolute inset-0 bg-[radial-gradient(80%_70%_at_50%_45%,transparent_40%,rgba(5,12,26,0.65)_100%)]" />
       <div className="grain" />
