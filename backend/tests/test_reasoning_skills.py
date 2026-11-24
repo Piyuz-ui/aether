@@ -158,14 +158,16 @@ _ = json
 
 # ------------------------------------------------- thinking needs output room
 @pytest.mark.parametrize("model,level,room", [
-    ("gpt-oss:20b", "high", 9216), ("gpt-oss:20b", "medium", 6144), ("gpt-oss:20b", "low", 3072),
+    ("gpt-oss:20b", "high", 12288), ("gpt-oss:20b", "medium", 6144), ("gpt-oss:20b", "low", 2048),
     ("qwen3:14b", "high", 6144),        # on/off models: "on" gets the medium room
     ("fake-model", "high", 2048),       # doesn't think: the usual cap
 ])
 async def test_reasoning_gets_more_output_room(model: str, level: str, room: int) -> None:
     llm = Thinker([say("ok")], model)
     [e async for e in AetherAgent(llm=llm).run("hi", Session(), reasoning=level)]
-    assert llm.requests[0]["options"]["num_predict"] == room
+    opts = llm.requests[0]["options"]
+    assert opts["num_predict"] == room
+    assert opts["num_ctx"] >= 16384 and opts["num_ctx"] >= room + 4096 if room > 2048 else True
 
 
 async def test_reasoning_that_runs_out_is_handed_back_not_thrown_away() -> None:
@@ -178,7 +180,9 @@ async def test_reasoning_that_runs_out_is_handed_back_not_thrown_away() -> None:
     assert "handing its reasoning back" in note.data["text"]
     retry = llm.requests[1]
     assert "<reasoning>" in retry["messages"][-1]["content"] and "doubly linked list" in retry["messages"][-1]["content"]
-    assert retry["think"] == "low" and llm.thinks == ["high", "low"]
+    assert retry["think"] == "medium" and llm.thinks == ["high", "medium"]        # one level lighter
+    assert [r["options"]["num_predict"] for r in llm.requests] == [12288, 16384]   # doubled, capped
+    assert retry["options"]["num_ctx"] >= 16384 + 4096
     done = next(e for e in events if e.type is EventType.DONE)
     assert done.data["answer"].startswith("Here's an O(1) LRU cache")
 
@@ -189,3 +193,15 @@ async def test_an_honest_message_when_thinking_never_finishes() -> None:
     events = [e async for e in AetherAgent(llm=llm).run("prove P != NP", Session(), reasoning="high")]
     answer = next(e for e in events if e.type is EventType.DONE).data["answer"]
     assert "ran out of room while thinking" in answer and "Reasoning: Med" in answer
+    assert llm.thinks[:3] == ["high", "medium", "low"]
+    notes = [e.data["text"] for e in events if e.type is EventType.THOUGHT]
+    assert "attempt 2 of 3" in notes[0] and "attempt 3 of 3" in notes[1]
+
+
+async def test_a_reply_cut_off_mid_answer_is_kept() -> None:
+    llm = Thinker([{"thinking": "Plan the class.", "content": "class LRU:\n    def __init__(self, n):",
+                    "done_reason": "length"}], "gpt-oss:20b")
+    events = [e async for e in AetherAgent(llm=llm).run("write an LRU cache", Session(), reasoning="high")]
+    answer = next(e for e in events if e.type is EventType.DONE).data["answer"]
+    assert answer.startswith("class LRU:") and "cut short" in answer
+    assert len(llm.requests) == 1 and not any(e.data.get("kind") == "retry" for e in events if e.type is EventType.THOUGHT)

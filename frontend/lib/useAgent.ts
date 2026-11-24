@@ -133,17 +133,21 @@ function applyEvent(state: State, e: AgentEvent): State {
             ? { ...m, thinking: m.thinking + d.text, reasoning: (m.reasoning ?? "") + d.text, thinkStart: m.thinkStart ?? e.ts }
             : { ...stopThinking(m, e.ts), draft: m.draft + d.text }),
       };
-    case "thought":
+    case "thought": {
       // The streamed text was the agent's reasoning before a tool call, not the answer.
+      const step = { kind: "thought" as const, text: String(d.text ?? ""), retry: d.kind === "retry" };
       return {
         ...state,
-        messages: updateLast(state.messages, (m) => ({
-          ...m,
-          draft: "",
-          thinking: "",
-          steps: [...m.steps, { kind: "thought", text: String(d.text ?? ""), retry: d.kind === "retry" }],
-        })),
+        messages: updateLast(state.messages, (m) => {
+          const last = m.steps[m.steps.length - 1];
+          // Back-to-back retries update one notice in place instead of stacking duplicates.
+          const steps = step.retry && last?.kind === "thought" && last.retry
+            ? [...m.steps.slice(0, -1), step]
+            : [...m.steps, step];
+          return { ...m, draft: "", thinking: "", steps };
+        }),
       };
+    }
     case "tool_start":
       return {
         ...state,

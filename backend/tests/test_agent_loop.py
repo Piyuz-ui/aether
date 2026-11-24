@@ -188,14 +188,19 @@ async def test_denied_tools_are_not_nudged(settings):
     assert done(events)["answer"] == "Okay, I kept it."
 
 
-async def test_runaway_generation_is_cut_off_and_retried(settings):
-    llm = FakeLLM([{"content": "I will I will I will I will", "done_reason": "length"},
-                   say("Short answer: 4.")])
+async def test_a_reply_cut_off_with_text_is_kept_not_retried(settings):
+    llm = FakeLLM([{"content": "Short answer: 4, because", "done_reason": "length"}, say("never asked")])
+    events = await run(AetherAgent(settings, llm=llm), "2+2?")
+    assert len(llm.requests) == 1
+    assert done(events)["answer"].startswith("Short answer: 4, because") and "cut short" in done(events)["answer"]
+
+
+async def test_an_empty_cut_off_reply_is_retried(settings):
+    llm = FakeLLM([{"content": "", "done_reason": "length"}, say("Short answer: 4.")])
     events = await run(AetherAgent(settings, llm=llm), "2+2?")
     assert any(e.type is EventType.THOUGHT and "too long" in e.data["text"] for e in events)
     assert "cut off" in llm.requests[1]["messages"][-1]["content"]
     assert done(events)["answer"] == "Short answer: 4."
-    assert llm.requests and True
 
 
 async def test_output_cap_is_sent_to_ollama(settings):

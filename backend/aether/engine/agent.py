@@ -40,9 +40,12 @@ INTENT_TOOLS: list[tuple[re.Pattern[str], str, str]] = [
      "create_pdf", "The user asked for a PDF. Call create_pdf now (with `source` or `content`)."),
 ]
 # Output room (tokens, thinking included) per reasoning level. Without thinking: max_output_tokens.
-REASONING_ROOM = {"low": 3072, "medium": 6144, "high": 9216}
-# After thinking used up all the room: hand its reasoning back and ask again, thinking less.
-LIGHTER = {"high": "low", "medium": "low", "low": "low"}
+REASONING_ROOM = {"low": 2048, "medium": 6144, "high": 12288}
+MAX_ROOM = 16384          # a retry doubles the room, up to this
+REASONING_CTX = 16384     # context floor when reasoning, so thinking plus the answer fit
+# After thinking used up all the room: hand its reasoning back and ask again one level lighter.
+LIGHTER = {"high": "medium", "medium": "low", "low": "low"}
+CUT_SHORT_NOTE = "\n\n_(This reply hit its length limit, so it may be cut short.)_"
 # "I'll use manage_timetable…", "let me call web_search" — a promise of a tool call.
 PROMISE_RE = re.compile(r"\b(i'll|i will|i'm going to|let me|let's|now i|next,? i)\b", re.IGNORECASE)
 # after_turn(goal, answer, model) → facts learned (shown to the user as a `memory` event)
@@ -112,15 +115,16 @@ class AetherAgent:
     def _options(self) -> dict[str, Any]:
         return self._options_for(False)
 
-    def _options_for(self, think: bool | str) -> dict[str, Any]:
+    def _options_for(self, think: bool | str, room: int | None = None) -> dict[str, Any]:
         """Thinking counts toward the output cap, so models that reason get more room: the higher
-        the level, the more (but never more than ~60% of the context window)."""
-        cap = self.settings.max_output_tokens
+        the level, the more. `room` overrides it (a retry after running out). The context grows
+        to hold the prompt plus that much output."""
+        cap, ctx = self.settings.max_output_tokens, self.settings.context_length
         if think:
-            room = REASONING_ROOM.get(think if isinstance(think, str) else "medium", REASONING_ROOM["medium"])
-            cap = max(cap, min(room, int(self.settings.context_length * 0.6)))
-        return {"num_ctx": self.settings.context_length, "temperature": self.settings.temperature,
-                "num_predict": cap}
+            level = think if isinstance(think, str) else "medium"
+            cap = max(cap, room or REASONING_ROOM.get(level, REASONING_ROOM["medium"]))
+            ctx = max(ctx, REASONING_CTX, cap + 4096)
+        return {"num_ctx": ctx, "temperature": self.settings.temperature, "num_predict": cap}
 
     # ------------------------------------------------------------------ loop
     async def run(self, goal: str, session: Session, *, run_id: str | None = None,
@@ -195,6 +199,7 @@ class AetherAgent:
             known = self.registry.names
             format_retries = 0
             thought_chars = 0  # how much it reasoned this run (for an honest message if it never answers)
+            room: int | None = None  # output room after a retry; None = the level's default
             nudges = 0
             unresolved: dict[str, str] = {}  # tool → error of a failed call not yet fixed
             used_ok: set[str] = set()        # tools that succeeded this turn
@@ -207,7 +212,7 @@ class AetherAgent:
                 calls: list[dict[str, Any]] = []
                 cut_off = False
                 stream = self.llm.chat_stream(model=model, messages=messages, tools=tools,
-                                              options=self._options_for(think), think=think)
+                                              options=self._options_for(think, room), think=think)
                 # Cloud providers report usage (what you're billed) only at the very end of a stream,
                 # so their streams are never cut short; the early stop is for small local models.
                 cloud = getattr(self.llm, "is_cloud", lambda _m: False)(model)
@@ -235,15 +240,24 @@ class AetherAgent:
                         calls, content = recovered, cleaned
 
                 thought_chars += len(thinking)
-                if not calls and cut_off and not content.strip() and thinking and format_retries < s.max_format_retries:
+                if not calls and cut_off and content.strip():
+                    # Cut off mid-answer: what it wrote is still the answer. Keep it, say it's cut short.
+                    answer = content + CUT_SHORT_NOTE
+                    break
+
+                if not calls and cut_off and thinking and format_retries < s.max_format_retries:
                     # It reasoned until the room ran out and never answered. Keep that work: hand the
-                    # reasoning back and ask for the answer now, with lighter reasoning.
+                    # reasoning back and ask for the answer now, one level lighter, with twice the room.
                     format_retries += 1
+                    used = self._options_for(think, room)["num_predict"]
+                    room = min(used * 2, MAX_ROOM)
+                    think = LIGHTER.get(think, "low") if isinstance(think, str) else think
+                    level = {"high": "High", "medium": "Med", "low": "Low"}.get(think, "") if isinstance(think, str) else ""
                     yield ev(EventType.THOUGHT, kind="retry",
-                             text="It used all its room thinking before answering, so I'm handing its reasoning "
-                                  "back and asking for the answer now.")
+                             text=f"It used all its room thinking before answering, so I'm handing its reasoning back "
+                                  f"and asking for the answer{f' at {level}' if level else ''} with more room "
+                                  f"(attempt {format_retries + 1} of {s.max_format_retries + 1}).")
                     messages.append({"role": "user", "content": SALVAGE_MESSAGE.format(reasoning=thinking[-6000:])})
-                    think = LIGHTER.get(think, False) if isinstance(think, str) else False
                     continue
 
                 if not calls and cut_off and format_retries < s.max_format_retries:
