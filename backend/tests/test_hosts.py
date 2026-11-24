@@ -95,10 +95,13 @@ async def test_vision_falls_back_to_the_pc_when_the_mac_has_no_vision_model() ->
     assert "vision" in await r.capabilities("qwen3.5:4b@pc")
 
 
-async def test_pc_default_falls_back_to_the_mac_when_the_pc_is_off() -> None:
+async def test_pc_default_stays_selected_while_the_pc_is_off() -> None:
+    """An offline PC stays your brain (each answer fails over on its own), so it's used again the
+    moment it's back."""
     r = make_router(FakePC(PC_MODELS, online=False))
     model, note = await r.resolve_model("qwen3:14b@pc", ["qwen2.5:7b"])
-    assert model == "qwen2.5:7b" and "The computer 'pc' isn't reachable" in (note or "")
+    assert model == "qwen3:14b@pc" and "isn't reachable right now" in (note or "")
+    assert (await r.failover(model, ["qwen2.5:7b"]))[0] == "qwen2.5:7b"
     on = make_router(FakePC(PC_MODELS))
     assert await on.resolve_model("qwen3:14b@pc", ["qwen2.5:7b"]) == ("qwen3:14b@pc", None)
 
@@ -215,7 +218,9 @@ async def test_away_from_home_it_uses_tailscale_and_switches_back_at_home() -> N
 async def test_nothing_answers_falls_back_to_the_mac_with_a_reason() -> None:
     r = two_address_router(FakePC(PC_MODELS, online=False), FakePC(PC_MODELS, online=False))
     model, note = await r.resolve_model("qwen3:14b@pc", ["qwen2.5:7b"])
-    assert model == "qwen2.5:7b" and "isn't reachable" in (note or "")
+    assert model == "qwen3:14b@pc" and "isn't reachable" in (note or "")      # stays your brain…
+    local, why = await r.failover(model, ["qwen2.5:7b"])
+    assert local == "qwen2.5:7b" and "this Mac" in (why or "")                  # …each answer falls back
 
 
 async def test_a_working_route_is_trusted_for_a_while() -> None:

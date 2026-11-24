@@ -17,6 +17,7 @@ import type { AssistantMessage, Message } from "@/lib/types";
 import { QuizDeck } from "./QuizDeck";
 import { useLandingId } from "./SendFlight";
 import { ChartCard, chartsIn } from "./ChartCard";
+import { ThoughtCard } from "./Reasoning";
 import { CLOUD_BLOCKED, FeedbackContext, FeedbackRow } from "./Feedback";
 import { GpuLive } from "./GpuLive";
 import { TelemetryChip } from "./Telemetry";
@@ -140,9 +141,7 @@ function AssistantBubble({ m, turn }: { m: AssistantMessage; turn: number }) {
             : <ThoughtLine key={`t${i}`} step={s} />)}
         </div>
       )}
-      {m.thinking && streaming && (
-        <div className="line-clamp-3 pl-1 text-[12.5px] italic text-mist/80">{m.thinking.slice(-400)}</div>
-      )}
+      <ThoughtCard m={m} />
       {charts.length > 0 && (
         <div className={clsx("grid gap-2.5", charts.length > 1 && "sm:grid-cols-2")}>
           {charts.map((a) => <ChartCard key={a.path} a={a} />)}

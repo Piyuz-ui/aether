@@ -87,6 +87,12 @@ export type AssistantMessage = {
   status: "streaming" | "done" | "error" | "stopped";
   /** The model answering (may differ from the selected one, e.g. a vision model for images). */
   model?: string;
+  /** The model's whole reasoning for this reply (all steps), and how long it spent thinking. */
+  reasoning?: string;
+  thinkMs?: number;
+  thinkStart?: number;
+  /** The reasoning level it ran with ("low" | "medium" | "high" | "on"), when it thinks. */
+  reasoningLevel?: string;
   stats?: RunStats;
   error?: { message: string; hint?: string };
   learned?: Fact[];
@@ -116,6 +122,8 @@ export type Health = {
   embeddings_hint: string | null;
   tools: number;
   context_length: number;
+  /** "levels" (gpt-oss: low/medium/high), "toggle" (other thinking models) or null. */
+  reasoning?: "levels" | "toggle" | null;
   cloud?: boolean;
   provider?: string | null;
   /** Set when the model runs on another computer on your network (e.g. "pc"). */
@@ -213,7 +221,10 @@ export type TranscriptMessage =
       )[];
     };
 
-export type ToolInfo = { name: string; description: string; category: string; icon: string; risk: string };
+export type ToolInfo = { name: string; description: string; category: string; icon: string; risk: string
+  pack?: "core" | "research" | "code_data" | "mcp";
+  level?: "SAFE" | "WRITE" | "HIGH_RISK";
+};
 
 export type GpuInfo = {
   name: string;
@@ -332,3 +343,5 @@ export type ClaudeStatus = {
     code_command: string;
   };
 };
+
+export type SkillInfo = { name: string; description: string; usage: string; tools: string[]; reasoning: string | null };

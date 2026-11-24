@@ -20,6 +20,9 @@ export function remoteHost(model?: string | null): string | null {
   return m ? m[1] : null;
 }
 
+/** How to write a computer's name: short ones like "pc" in capitals ("PC"). */
+export const hostLabel = (host: string) => (host.length <= 3 ? host.toUpperCase() : host);
+
 /** The model's own name: "gemini:gemini-2.5-flash" → "gemini-2.5-flash", "qwen3:14b@pc" → "qwen3:14b". */
 export function modelName(model?: string | null): string {
   if (!model) return "";

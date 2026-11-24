@@ -1,4 +1,4 @@
-"""Tool router, the Python sandbox (real runs), analyze_csv, and chart artifacts end to end."""
+"""Tool router, the Python sandbox (real runs), analyze_dataset, and chart artifacts end to end."""
 from __future__ import annotations
 
 import json
@@ -27,7 +27,7 @@ ALL = REGISTRY.all()
 # ------------------------------------------------------------------ router
 @pytest.mark.parametrize("prompt,must,not_in", [
     ("plot a bar chart of my marks in maths 78 physics 85 chemistry 91", {"python_sandbox"}, {"run_shell_command"}),
-    ("analyse uploads/sales.csv and tell me the trends", {"analyze_csv", "python_sandbox"}, set()),
+    ("analyse uploads/sales.csv and tell me the trends", {"analyze_dataset", "python_sandbox"}, set()),
     ("I have a DBMS exam on friday, add it", {"add_task"}, {"python_sandbox"}),
     ("what does my lecture pdf say about normalisation?", {"search_knowledge_base"}, set()),
     ("read https://example.com/article and summarise it", {"read_webpage"}, set()),
@@ -35,14 +35,15 @@ ALL = REGISTRY.all()
 ])
 def test_router_picks_the_right_tools(prompt: str, must: set[str], not_in: set[str]) -> None:
     picked = route(prompt, ALL)
-    assert 6 <= len(picked) <= 8
+    assert 6 <= len(picked) <= 9 and picked[-1] == "list_available_capabilities"
     assert must <= set(picked), picked
     assert not (not_in & set(picked)), picked
 
 
 def test_router_small_talk_gets_sensible_defaults_and_follow_ups_keep_tools() -> None:
     picked = route("hi, how are you?", ALL)
-    assert {"search_knowledge_base", "recall_memory", "web_search"} <= set(picked) and len(picked) == 6
+    assert {"search_knowledge_base", "recall_memory", "web_search"} <= set(picked)
+    assert len(picked) == 7 and picked[-1] == "list_available_capabilities"   # 6 defaults + the meta-tool
     follow_up = route("now make it a line chart instead", ALL, recent={"python_sandbox"})
     assert follow_up[0] == "python_sandbox"
 
@@ -53,10 +54,10 @@ def test_every_builtin_tool_is_catalogued_with_a_level() -> None:
             continue
         assert spec.name in CATALOG, spec.name
         m = meta_for(spec.name, spec)
-        assert m.pack in {"core", "research", "code_data"} and m.tags
+        assert m.pack in {"system_mac", "knowledge_rag", "code_data", "research_web", "productivity"} and m.tags
         if spec.risk.value == "requires_approval" and spec.risk_check is None:
             assert m.level is Level.HIGH_RISK or m.level is Level.WRITE, spec.name
-    assert CATALOG["python_sandbox"].level is Level.HIGH_RISK and CATALOG["analyze_csv"].level is Level.SAFE
+    assert CATALOG["python_sandbox"].level is Level.HIGH_RISK and CATALOG["analyze_dataset"].level is Level.SAFE
 
 
 async def test_local_models_get_routed_tools_cloud_models_get_all() -> None:
@@ -64,7 +65,7 @@ async def test_local_models_get_routed_tools_cloud_models_get_all() -> None:
     agent = AetherAgent(llm=llm)
     events = [e async for e in agent.run("plot a chart of 1 2 3", Session())]
     offered = next(e.data["tools"] for e in events if e.type is EventType.STATUS and "tools" in e.data)
-    assert "python_sandbox" in offered and len(offered) <= 8
+    assert "python_sandbox" in offered and len(offered) <= 9
     assert len(llm.requests[0]["tools"]) == len(offered)
 
     class Cloud(FakeLLM):
@@ -102,7 +103,7 @@ async def test_sandbox_keeps_charts_you_save_yourself_and_has_no_secrets() -> No
 async def test_sandbox_errors_and_timeouts(monkeypatch: pytest.MonkeyPatch) -> None:
     with pytest.raises(ToolError, match="exit 1"):
         await code_data.python_sandbox("raise ValueError('boom')")
-    with pytest.raises(ToolError, match="numpy, pandas and matplotlib"):
+    with pytest.raises(ToolError, match="numpy, pandas, matplotlib and sympy"):
         await code_data.python_sandbox("import sklearn")
     monkeypatch.setattr(code_data, "SANDBOX_TIMEOUT_S", 2)
     started = time.monotonic()
@@ -111,23 +112,23 @@ async def test_sandbox_errors_and_timeouts(monkeypatch: pytest.MonkeyPatch) -> N
     assert time.monotonic() - started < 8
 
 
-# ------------------------------------------------------------- analyze_csv
-async def test_analyze_csv_and_excel() -> None:
+# ------------------------------------------------------------- analyze_dataset
+async def test_analyze_dataset_and_excel() -> None:
     import pandas as pd
     up = workspace().root / "uploads"
     up.mkdir(parents=True, exist_ok=True)
     df = pd.DataFrame({"subject": ["Maths", "Physics", "Maths", None], "marks": [78, 85, 91, 60]})
     df.to_csv(up / "marks.csv", index=False)
-    out = await code_data.analyze_csv("uploads/marks.csv")
+    out = await code_data.analyze_dataset("uploads/marks.csv")
     assert "4 rows × 2 columns" in out and "| marks | int64 | 4 | 0 | 4 |" in out
     assert "Top values · subject" in out and "Maths (2)" in out and "78.5" in out   # median
     df.to_excel(up / "marks.xlsx", index=False, sheet_name="Term 1")
-    assert "4 rows × 2 columns" in await code_data.analyze_csv("uploads/marks.xlsx")
+    assert "4 rows × 2 columns" in await code_data.analyze_dataset("uploads/marks.xlsx")
     with pytest.raises(Exception):
-        await code_data.analyze_csv("uploads/nope.csv")
+        await code_data.analyze_dataset("uploads/nope.csv")
     (up / "x.xls").write_bytes(b"old")
     with pytest.raises(ToolError, match="xlsx"):
-        await code_data.analyze_csv("uploads/x.xls")
+        await code_data.analyze_dataset("uploads/x.xls")
 
 
 # --------------------------------------------- artifacts through the stack
@@ -168,7 +169,7 @@ def test_api_serves_artifacts_and_takes_data_uploads(settings: Any, tmp_path: An
         routed = c.get("/api/tools/route", params={"q": "chart my csv"}).json()["tools"]
         assert "python_sandbox" in routed
         tools = {t["name"]: t for t in c.get("/api/tools").json()}
-        assert tools["python_sandbox"]["level"] == "HIGH_RISK" and tools["analyze_csv"]["pack"] == "code_data"
+        assert tools["python_sandbox"]["level"] == "HIGH_RISK" and tools["analyze_dataset"]["pack"] == "code_data"
 
 
 _ = json

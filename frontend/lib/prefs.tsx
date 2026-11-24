@@ -20,6 +20,7 @@ export type Prefs = {
   speed: number; // 0.85 – 1.25
   hideAddresses: boolean; // mask computers' IPs / URLs on screen
   chatsOpen: boolean; // the chats sidebar on the left
+  reasoning: "low" | "medium" | "high"; // how hard thinking models think
 };
 
 const DEFAULTS: Prefs = {
@@ -33,6 +34,7 @@ const DEFAULTS: Prefs = {
   speed: 1,
   hideAddresses: false,
   chatsOpen: true,
+  reasoning: "medium",
 };
 
 const KEY = "aether.prefs.v1";

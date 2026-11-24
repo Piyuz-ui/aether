@@ -14,7 +14,7 @@ import { useLive } from "@/lib/useLive";
 import { Chip } from "../ui";
 import { ConfirmDelete, Empty, ErrorNote, PanelTitle } from "./shared";
 
-const ACCEPT = ".pdf,.pptx,.md,.markdown,.txt";
+const ACCEPT = ".pdf,.docx,.pptx,.md,.markdown,.txt,.xlsx,.csv,.tsv,.ipynb,.py,.js,.ts,.tsx,.java,.c,.cpp,.go,.rs,.sql,.json,.yaml,.yml,.html,.css,image/*";
 const busy = (d: KnowledgeDoc) => ["queued", "reading", "embedding"].includes(d.status);
 
 export function VaultPanel({ revision, toast }: { revision: number; toast: (t: string, b?: string) => void }) {
@@ -72,8 +72,8 @@ export function VaultPanel({ revision, toast }: { revision: number; toast: (t: s
         <motion.div animate={uploading ? { y: [0, -5, 0] } : { y: 0 }} transition={{ duration: 0.9, repeat: uploading ? Infinity : 0 }}>
           <UploadCloud className="mx-auto size-7 text-glacier" />
         </motion.div>
-        <div className="mt-2 text-sm text-frost">{uploading ? "Uploading…" : "Drop PDFs, slides or notes here"}</div>
-        <div className="text-xs text-mist">or click to choose · PDF, PPTX, MD, TXT</div>
+        <div className="mt-2 text-sm text-frost">{uploading ? "Uploading…" : "Drop documents, sheets, code or images here"}</div>
+        <div className="text-xs text-mist">or click to choose · PDF, Word, PowerPoint, Excel/CSV, code, images</div>
         <input ref={input} type="file" multiple accept={ACCEPT} className="hidden"
           onChange={(e) => { void upload(Array.from(e.target.files ?? [])); e.target.value = ""; }} />
       </motion.div>

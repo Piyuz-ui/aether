@@ -105,11 +105,21 @@ function reducer(state: State, action: Action): State {
   }
 }
 
+/** Close a thinking stretch: add its duration to the reply's total thinking time. */
+function stopThinking(m: AssistantMessage, ts: number): AssistantMessage {
+  if (m.thinkStart === undefined) return m;
+  return { ...m, thinkMs: (m.thinkMs ?? 0) + Math.max(0, (ts - m.thinkStart) * 1000), thinkStart: undefined };
+}
+
 function applyEvent(state: State, e: AgentEvent): State {
   const d = e.data as Record<string, never>;
   switch (e.type) {
     case "status": {
       const next = { ...state, agentState: d.state as AgentState };
+      if (d.reasoning) {
+        return { ...next, messages: updateLast(state.messages, (m) => ({
+          ...m, model: (d.model as string) || m.model, reasoningLevel: d.reasoning as string })) };
+      }
       // The run's first status names the model actually answering (it can switch for images).
       return d.model
         ? { ...next, messages: updateLast(state.messages, (m) => ({ ...m, model: d.model as string })) }
@@ -119,7 +129,9 @@ function applyEvent(state: State, e: AgentEvent): State {
       return {
         ...state,
         messages: updateLast(state.messages, (m) =>
-          d.channel === "thinking" ? { ...m, thinking: m.thinking + d.text } : { ...m, draft: m.draft + d.text }),
+          d.channel === "thinking"
+            ? { ...m, thinking: m.thinking + d.text, reasoning: (m.reasoning ?? "") + d.text, thinkStart: m.thinkStart ?? e.ts }
+            : { ...stopThinking(m, e.ts), draft: m.draft + d.text }),
       };
     case "thought":
       // The streamed text was the agent's reasoning before a tool call, not the answer.
@@ -136,7 +148,7 @@ function applyEvent(state: State, e: AgentEvent): State {
       return {
         ...state,
         messages: updateLast(state.messages, (m) => ({
-          ...m,
+          ...stopThinking(m, e.ts),
           draft: "",
           steps: [...m.steps, {
             kind: "tool", callId: d.call_id, name: d.name, args: (d.args ?? {}) as Record<string, unknown>,
@@ -177,7 +189,7 @@ function applyEvent(state: State, e: AgentEvent): State {
         ...state,
         agentState: "idle",
         messages: updateLast(state.messages, (m) => ({
-          ...m, status: "done", content: String(d.answer ?? ""), draft: "", thinking: "",
+          ...stopThinking(m, e.ts), status: "done", content: String(d.answer ?? ""), draft: "", thinking: "",
           stats: d.stats as unknown as RunStats,
         })),
       };
@@ -238,7 +250,8 @@ export function useAgent(options?: { onAnswer?: (text: string) => void; onLearne
     if (last) void loadSession(last);
   }, [loadSession]);
 
-  const send = useCallback(async (text: string, images?: string[], opts?: { userId?: string }) => {
+  const send = useCallback(async (text: string, images?: string[],
+    opts?: { userId?: string; reasoning?: string | null; skill?: string | null }) => {
     const goal = text.trim() || (images?.length ? "What's in this image?" : "");
     if (!goal || controller.current) return;
     const ac = new AbortController();
@@ -250,7 +263,8 @@ export function useAgent(options?: { onAnswer?: (text: string) => void; onLearne
         method: "POST",
         headers: { "Content-Type": "application/json", Accept: "text/event-stream" },
         body: JSON.stringify({ message: goal, session_id: stateRef.current.sessionId,
-          images: (images ?? []).map((d) => d.slice(d.indexOf(",") + 1)) }),
+          images: (images ?? []).map((d) => d.slice(d.indexOf(",") + 1)),
+          reasoning: opts?.reasoning ?? null, skill: opts?.skill ?? null }),
         signal: ac.signal,
       });
       if (!res.ok) {

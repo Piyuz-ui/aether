@@ -18,6 +18,7 @@ import type {
   McpServerConfig,
   McpServerEntry,
   SessionSummary,
+  SkillInfo,
   Task,
   ToolInfo,
   TranscriptMessage,
@@ -73,6 +74,7 @@ export const api = {
   providers: () => request<CloudProvider[]>("/api/providers"),
   hosts: () => request<NetworkHost[]>("/api/hosts"),
   hardware: () => request<HardwareCard[]>("/api/hardware"),
+  skills: () => request<SkillInfo[]>("/api/skills"),
   usage: () => request<UsageSummary>("/api/usage"),
   setPrice: (model: string, input_per_m: number, output_per_m: number) =>
     request("/api/usage/prices", json("PUT", { model, input_per_m, output_per_m })),

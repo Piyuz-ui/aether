@@ -110,8 +110,10 @@ class ModelRouter:
         if not addrs:
             return False
         checked_at, worked = self._route_ok.get(name, (0.0, False))
-        if not force and worked and time.monotonic() - checked_at < ROUTE_TTL_S:
-            return True
+        # A working route is trusted for 15 s; a failed check is remembered for 10 s, so an
+        # unreachable PC costs one 2 s check, not one per message.
+        if not force and checked_at and time.monotonic() - checked_at < (ROUTE_TTL_S if worked else 10.0):
+            return worked
         results = await asyncio.gather(*(self._answers(u) for u in addrs))
         chosen = next((u for u, ok in zip(addrs, results) if ok), None)
         if chosen is not None:
@@ -184,6 +186,26 @@ class ModelRouter:
             return host, bare
         return None, model
 
+    async def failover(self, model: str, local_prefs: list[str]) -> tuple[str, str | None]:
+        """If `model` runs on a network PC that doesn't answer right now, pick a model on this Mac
+        instead (the same one if it's installed here, else your usual local default)."""
+        if not self.is_remote(model):
+            return model, None
+        host, bare = self.split_host(model)
+        if await self.ensure_route(host or ""):
+            return model, None
+        try:
+            installed = await self.ollama.list_models()
+            if bare in installed:
+                local = bare
+            else:
+                prefs = [m for m in local_prefs if m and not self.is_cloud(m) and not self.is_remote(m)]
+                local, _ = await self.ollama.resolve_model(*(prefs[:1] or ["qwen2.5:7b"]), prefs[1:])
+        except OllamaError:
+            return model, None  # nothing local either: let the real error explain
+        return local, (f"{host} isn't reachable right now (off, asleep or on another network), so this "
+                       f"answer runs on {local} on this Mac.")
+
     def is_remote(self, model: str | None) -> bool:
         """A model on another computer on your network (private, but not this machine)."""
         return bool(model) and not self.is_cloud(model) and self.split_host(model or "")[0] is not None
@@ -237,7 +259,10 @@ class ModelRouter:
                 why = (f"'{bare}' isn't installed on the computer '{host}'" if client
                        else f"There's no computer named '{host}' set up")
             except OllamaError:
-                why = f"The computer '{host}' isn't reachable right now"
+                # Offline now (asleep, or you're away without Tailscale): keep it as your brain.
+                # Each answer checks again and runs on this Mac only while it's unreachable.
+                return preferred, (f"{host} isn't reachable right now, so answers run on this Mac "
+                                   "until it's back.")
             local, _note = await self.ollama.resolve_model(*(fallbacks[:1] or ["qwen2.5:7b"]), fallbacks[1:])
             return local, f"{why}, so using {local} on this Mac for now."
         if self.is_cloud(preferred):

@@ -3,8 +3,9 @@
 python_sandbox  Runs a Python script in a separate, locked-down process (numpy, pandas and
                 matplotlib available; 15 s limit; no API keys or network credentials in its
                 environment). Charts are saved to workspace/artifacts/ and shown in the chat.
-analyze_csv     Describes a CSV / TSV / Excel / JSON table: shape, columns, types, gaps,
-                summary statistics and a preview.
+analyze_dataset Describes a CSV / TSV / Excel / JSON table (shape, columns, types, gaps,
+                summary statistics, a preview) and answers simple questions about it with safe,
+                structured queries: filter, group, aggregate, sort. No free-form code.
 
 A tool's output marks each image it made with a line `[artifact] artifacts/<file>.png`; the
 engine turns those into URLs on the tool_result event, and the chat renders them as cards.
@@ -13,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import re
 import signal
 import sys
 import tempfile
@@ -83,7 +85,8 @@ def _sandbox_summary(args: dict[str, Any]) -> str:
 
 
 @tool(description=(
-    "Run Python with numpy, pandas and matplotlib to analyse data, compute, or draw charts. "
+    "Run Python with numpy, pandas, matplotlib and sympy to analyse data, solve maths (symbolically too), "
+    "or draw charts. "
     "Save charts with plt.savefig(f'{ARTIFACTS}/name.png') (or just draw them: unsaved figures are "
     "saved for you) and they appear in the chat. Files the user attached are in uploads/. "
     "print() what the user should see. 15-second limit; the user approves each run."),
@@ -124,7 +127,7 @@ async def python_sandbox(code: str) -> str:
     if proc.returncode != 0:
         hint = ""
         if "ModuleNotFoundError" in out:
-            hint = " Only the standard library, numpy, pandas and matplotlib are available."
+            hint = " Only the standard library, numpy, pandas, matplotlib and sympy are available."
         raise ToolError(f"The script failed (exit {proc.returncode}).{hint}\n{out or '(no output)'}")
     lines = [out or "(no printed output)"]
     lines += [f"{ARTIFACT_MARK}{workspace().relative(p)}" for p in made]
@@ -134,7 +137,7 @@ async def python_sandbox(code: str) -> str:
     return "\n".join(lines)
 
 
-# ----------------------------------------------------------------- analyze_csv
+# ----------------------------------------------------------------- analyze_dataset
 def _read_table(path: Path, sheet: str) -> Any:
     import pandas as pd
     ext = path.suffix.lower()
@@ -183,18 +186,77 @@ def _analyse(path: Path, sheet: str) -> str:
     return "\n".join(parts)
 
 
+# A filter is a pandas query over column names, numbers, strings and comparisons only. No calls,
+# attributes, @-variables or dunders, so it can't run code.
+_SAFE_FILTER = re.compile(r"^[\w\s.'\"`<>=!&|~+\-*/%(),\[\]]+$")
+AGGS = {"count", "sum", "mean", "median", "min", "max", "std", "nunique"}
+
+
+def _query(path: Path, sheet: str, filter: str, columns: str, group_by: str, agg: str,
+           sort_by: str, descending: bool, limit: int) -> str:
+    import pandas as pd
+    df = _read_table(path, sheet)
+    notes = []
+    if filter.strip():
+        f = filter.strip()
+        if not _SAFE_FILTER.match(f) or "__" in f or "@" in f or re.search(r"[A-Za-z_]\w*\s*\(", f) or "import" in f:
+            raise ToolError("The filter may only compare columns with values, e.g. `marks > 80 and subject == 'Maths'` "
+                            "(use backticks for names with spaces: `` `study hours` > 2 ``).")
+        try:
+            df = df.query(f, engine="python", local_dict={}, global_dict={})
+        except Exception as e:  # noqa: BLE001
+            raise ToolError(f"The filter didn't work: {e}. Columns: {', '.join(map(str, df.columns[:30]))}") from e
+        notes.append(f"filter `{f}` → {len(df):,} rows")
+    cols = [c.strip() for c in columns.split(",") if c.strip()]
+    missing = [c for c in cols + [g.strip() for g in group_by.split(",") if g.strip()] if c not in df.columns]
+    if missing:
+        raise ToolError(f"No column named {', '.join(missing)}. Columns: {', '.join(map(str, df.columns[:40]))}")
+    if group_by.strip():
+        keys = [g.strip() for g in group_by.split(",") if g.strip()]
+        fn = (agg or "count").strip().lower()
+        if fn not in AGGS:
+            raise ToolError(f"agg must be one of {', '.join(sorted(AGGS))}.")
+        target = cols or [c for c in df.select_dtypes("number").columns if c not in keys]
+        grouped = df.groupby(keys, dropna=False)
+        df = (grouped.size().to_frame("count") if fn == "count" or not target
+              else getattr(grouped[target], fn)()).reset_index()
+        notes.append(f"grouped by {', '.join(keys)} ({fn})")
+    elif cols:
+        df = df[cols]
+    if sort_by.strip():
+        if sort_by.strip() not in df.columns:
+            raise ToolError(f"Can't sort by '{sort_by}': not a column of the result ({', '.join(map(str, df.columns))}).")
+        df = df.sort_values(sort_by.strip(), ascending=not descending)
+    limit = max(1, min(int(limit), 200))
+    shown = df.head(limit)
+    head = f"# {path.name}: {len(df):,} rows" + (f" ({'; '.join(notes)})" if notes else "")
+    more = f"\n… {len(df) - limit:,} more rows" if len(df) > limit else ""
+    return f"{head}\n\n{shown.round(4).to_markdown(index=False, maxcolwidths=28)}{more}"
+
+
 @tool(description=(
-    "Inspect a data table the user has (CSV, TSV, Excel .xlsx or JSON): rows and columns, column types, "
-    "missing values, summary statistics, top values and the first rows. Use it before analysing or "
-    "charting a file. Uploaded files are in uploads/."),
+    "Analyse a data table the user has (CSV, TSV, Excel .xlsx or JSON). With just a path: a profile "
+    "(rows, columns, types, missing values, statistics, top values, first rows). Add filter / group_by / "
+    "agg / sort_by / columns to answer questions, e.g. average marks per subject. Uploaded files are in uploads/."),
     params={"path": "The file's path in the workspace, e.g. uploads/sales.csv",
-            "sheet": "Excel only: which sheet (default: the first)"},
+            "sheet": "Excel only: which sheet (default: the first)",
+            "filter": "Optional row filter comparing columns with values, e.g. marks > 80 and subject == 'Maths'",
+            "columns": "Optional comma-separated columns to keep (or to aggregate when grouping)",
+            "group_by": "Optional comma-separated columns to group by",
+            "agg": "With group_by: count, sum, mean, median, min, max, std or nunique (default count)",
+            "sort_by": "Optional column of the result to sort by",
+            "descending": "Sort high to low (default true)",
+            "limit": "Rows to show (default 20, max 200)"},
     category="code_data", icon="table", timeout_s=30)
-async def analyze_csv(path: str, sheet: str = "") -> str:
+async def analyze_dataset(path: str, sheet: str = "", filter: str = "", columns: str = "", group_by: str = "",
+                          agg: str = "", sort_by: str = "", descending: bool = True, limit: int = 20) -> str:
     target = workspace().resolve(path, must_exist=True)
     if not target.is_file():
         raise ToolError(f"'{path}' is a folder. Give a file, e.g. uploads/data.csv.")
     try:
+        if any(x.strip() for x in (filter, columns, group_by, sort_by)):
+            return await asyncio.to_thread(_query, target, sheet, filter, columns, group_by, agg, sort_by,
+                                           descending, limit)
         return await asyncio.to_thread(_analyse, target, sheet)
     except ToolError:
         raise

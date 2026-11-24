@@ -12,7 +12,7 @@
 ![Ollama](https://img.shields.io/badge/LLM-Ollama%20(local)-7DD3FC)
 ![MCP](https://img.shields.io/badge/MCP-client-A5B4FC)
 ![Voice](https://img.shields.io/badge/Voice-Kokoro--82M-5EEAD4)
-![Tests](https://img.shields.io/badge/tests-265%20passing-5EEAD4)
+![Tests](https://img.shields.io/badge/tests-303%20passing-5EEAD4)
 ![Privacy](https://img.shields.io/badge/data-local%20by%20default-0E2442)
 [![License: MIT](https://img.shields.io/badge/license-MIT-F0F9FF)](LICENSE)
 
@@ -48,20 +48,38 @@ It does this with **no cloud API**: a local model through [Ollama](https://ollam
 | 🗓️ **Planner** | Deadlines and timetable in SQLite. Natural dates (*"next Friday 5pm"*) resolved **in code**; .ics export with alarms |
 | 🎙️ **Neural voice** | Kokoro-82M, synthesised locally ~6× faster than real time, played **gaplessly** sentence by sentence, with a symbiote that ripples to the voice |
 | 📊 **Telemetry** | Every reply shows its tool chain, steps, tokens, context-window use and latency |
+| 🖥️ **Mac + GPU PC, anywhere** | Runs models on an RTX 5080 PC over the home network or Tailscale; if the PC is off, that answer runs on the Mac. Live GPU load, VRAM and link quality |
+| 🧩 **Reasoning control** | `gpt-oss` reasoning Low · Med · High from the input box, and a "Thought for 3.8s" card with its reasoning |
+| ⚡ **Skills** | `/brief`, `/quiz`, `/deep` and your own: plain Markdown playbooks in `backend/skills/` |
+| 🎯 **Tool packs + router** | 26 tools in 6 packs; small local models get only the 6–8 relevant ones (keywords + meaning), and can load a pack mid-task |
+| 📈 **Code & charts** | A sandboxed Python interpreter (numpy, pandas, matplotlib); charts appear inline with a Download button |
+| 🔁 **MCP both ways** | Use any MCP server (local or URL) in AETHER, and let Claude Desktop / Code use AETHER's study tools |
+| ☁️ **Cloud, opt-in** | 11 providers (7 with free tiers) with a Usage tab: spend, tokens, context and a monthly budget |
 | ✨ **Liquid-glass UI** | Next.js + Framer Motion: drifting light, cursor parallax, frosted glass, spring physics and a living amoeba-like symbiote that reacts to what the agent is doing (with a Calm mode) |
 
 ## How it works
 
 ```mermaid
 flowchart LR
-    U["Web UI · CLI<br/>voice · drag & drop"] <-->|"SSE event stream"| API["FastAPI"]
-    API --> LOOP["ReAct loop<br/>think → act → observe"]
-    LOOP <-->|"streaming tool calls"| LLM[("Ollama<br/>qwen · vision models")]
-    LOOP --> GATE{"Safety gate"}
-    GATE -->|"approve / deny"| U
-    GATE --> TOOLS["20 built-in tools<br/>+ MCP servers"]
-    LOOP <--> MEM[("SQLite + sqlite-vec<br/>sessions · facts · tasks · docs")]
-    API --> TTS["Kokoro-82M TTS"] -->|"WAV per sentence"| U
+    subgraph MAC["MacBook Pro"]
+        U["Glass UI · CLI<br/>chats · /skills · charts · voice"] <-->|"SSE event stream"| API["FastAPI"]
+        API --> LOOP["ReAct loop<br/>think → act → observe"]
+        LOOP --> ROUTE{"Tool router<br/>6–8 of 26 tools · 6 packs"}
+        ROUTE --> GATE{"Safety gate"}
+        GATE -->|"approve / deny"| U
+        GATE --> TOOLS["Tools · Python sandbox<br/>+ MCP servers"]
+        LOOP <--> MEM[("SQLite + sqlite-vec<br/>chats · facts · tasks · docs · usage")]
+        API --> TTS["Kokoro-82M TTS"] -->|"WAV per sentence"| U
+        LOOP <--> MR{"Model router"}
+        MR --> MACLLM[("Ollama on the Mac<br/>qwen · vision")]
+    end
+    subgraph PC["RTX 5080 PC at home"]
+        PCLLM[("Ollama<br/>gpt-oss:20b · qwen3")]
+        MON["Hardware monitor<br/>GPU · VRAM · RAM"]
+    end
+    MR -->|"LAN, or Tailscale away from home<br/>falls back to the Mac if offline"| PCLLM
+    MR -.->|"opt-in"| CLOUD["Cloud brains<br/>Claude · Gemini · Groq · …"]
+    CLAUDE["Claude Desktop / Code"] -->|"MCP"| AMCP["AETHER as an MCP server"]
 ```
 
 1. Your goal arrives with **memory context**: relevant facts, upcoming deadlines, today's classes and your weak quiz topics.
@@ -83,18 +101,16 @@ Full design: **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** (system and sequen
 
 ## Tools
 
-| Area | Tools | Safety |
+26 tools in six packs. Small local models are offered only the 6–8 a message needs (matched by tags and by meaning with `nomic-embed-text`), plus `list_available_capabilities` to load a whole pack mid-task. Packs can be switched off or pinned (`GET/PUT /api/packs`).
+
+| Pack | Tools | Level |
 |---|---|---|
-| Research | `web_search` (4 fallback sources), `read_webpage` (blocks private IPs) | safe |
-| Code & data | `python_sandbox` (numpy, pandas, matplotlib; 15 s; charts appear inline), `analyze_csv` (CSV / Excel / JSON) | asks / safe |
-| Knowledge | `search_knowledge_base`, `list_documents` | safe |
-| Study | `make_quiz` | safe |
-| Planner | `add_task`, `manage_tasks`, `add_class`, `manage_timetable` | deleting asks first |
-| Memory | `remember`, `recall_memory`, `forget` | forgetting asks first |
-| Notes & docs | `write_note`, `read_file`, `list_files`, `create_pdf` | overwriting asks first |
-| Compute | `python_calculator` (its own AST interpreter, never `eval`) | safe |
-| System | `run_python`, `run_shell_command`, `delete_file` | **always asks** |
-| MCP | anything your MCP servers expose | read-only runs freely; the rest asks |
+| `knowledge_rag` | `search_knowledge_base` (hybrid vector + BM25, cited), `list_documents`, `ingest_any_file` (PDF, Word, PowerPoint, Excel/CSV, code, notebooks, images via a local vision model), `read_file`, `list_files`, `write_note`, `create_pdf`, `make_quiz`, `delete_file` | safe / write / **delete asks** |
+| `code_data` | `python_sandbox` (numpy, pandas, matplotlib, sympy; 15 s; charts inline), `analyze_dataset` (profile + safe filter / group / aggregate / sort), `python_calculator` (AST, never `eval`), `run_python` | sandbox & Python **ask first** |
+| `research_web` | `web_search` (4 fallback sources), `read_webpage` (blocks private IPs), `youtube_transcript`, `arxiv_wiki_lookup` (arXiv + Wikipedia) | safe; says so when offline |
+| `productivity` | `add_task`, `manage_tasks`, `add_class`, `manage_timetable`, `remember`, `recall_memory`, `forget` | write; deleting asks first |
+| `system_mac` | `run_shell_command` (Wave 2 adds apps, Calendar, Reminders, clipboard, Spotlight) | **always asks** |
+| `mcp_bridge` | anything your MCP servers expose | read-only runs freely; the rest asks |
 
 Adding a tool is one decorated function. The JSON schema comes from the type hints:
 

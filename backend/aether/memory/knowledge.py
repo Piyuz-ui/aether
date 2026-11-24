@@ -21,8 +21,17 @@ from typing import Any
 from .embedder import Embedder
 from .store import Store, to_blob
 
-SUPPORTED = {".pdf", ".md", ".markdown", ".txt", ".pptx"}
 SLIDE_FORMATS = {".pptx"}
+DOC_FORMATS = {".docx"}
+SHEET_FORMATS = {".xlsx", ".xlsm", ".csv", ".tsv"}
+IMAGE_FORMATS = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
+CODE_FORMATS = {".py", ".js", ".ts", ".tsx", ".jsx", ".java", ".c", ".h", ".cpp", ".hpp", ".cs", ".go", ".rs",
+                ".rb", ".php", ".swift", ".kt", ".scala", ".r", ".sql", ".sh", ".zsh", ".ps1", ".html", ".css",
+                ".scss", ".json", ".yaml", ".yml", ".toml", ".ini", ".xml", ".tex", ".ipynb"}
+SUPPORTED = ({".pdf", ".md", ".markdown", ".txt", ".pptx"} | DOC_FORMATS | SHEET_FORMATS | IMAGE_FORMATS
+             | CODE_FORMATS)
+SHEET_ROW_LIMIT = 3000   # rows read per sheet (tables beyond this: use analyze_dataset)
+DOC_PART_CHARS = 3500    # a .docx has no pages: it's cited in parts of about this size
 CHUNK_CHARS = 1000
 OVERLAP_CHARS = 180
 RRF_K = 60
@@ -43,8 +52,16 @@ class Hit:
     semantic: float | None = None
 
     def cite(self) -> str:
-        unit = "slide" if Path(self.filename).suffix.lower() in SLIDE_FORMATS else "p."
-        return f"{self.filename} {unit}{' ' if unit == 'slide' else ''}{self.page}"
+        unit = citation_unit(self.filename)
+        return f"{self.filename} {unit}" if unit == "image" else \
+            f"{self.filename} {unit}{'' if unit == 'p.' else ' '}{self.page}"
+
+
+def citation_unit(filename: str) -> str:
+    """How a passage's place is named: p.3, slide 3, sheet 2, part 4, or just the image."""
+    ext = Path(filename).suffix.lower()
+    return ("slide" if ext in SLIDE_FORMATS else "sheet" if ext in SHEET_FORMATS
+            else "part" if ext in DOC_FORMATS else "image" if ext in IMAGE_FORMATS else "p.")
 
 
 class KnowledgeError(ValueError):
@@ -96,6 +113,83 @@ def read_slides(path: Path) -> list[str]:
     return slides
 
 
+def read_docx(path: Path) -> list[str]:
+    """Word documents: paragraphs (with heading markers) and tables, in order, split into parts."""
+    try:
+        import docx
+        from docx.table import Table
+        from docx.text.paragraph import Paragraph
+    except ImportError as e:
+        raise KnowledgeError("Reading .docx needs python-docx: pip install -r requirements.txt") from e
+    try:
+        d = docx.Document(str(path))
+    except Exception as e:
+        raise KnowledgeError(f"Couldn't read the Word file: {type(e).__name__}: {e}") from e
+    blocks: list[str] = []
+    for child in d.element.body.iterchildren():
+        tag = child.tag.rsplit("}", 1)[-1]
+        if tag == "p":
+            p = Paragraph(child, d)
+            text = p.text.strip()
+            if text:
+                style = (p.style.name or "").lower() if p.style is not None else ""
+                blocks.append(f"## {text}" if style.startswith("heading") or style == "title" else text)
+        elif tag == "tbl":
+            rows = [" | ".join(c.text.strip() for c in r.cells) for r in Table(child, d).rows]
+            if rows:
+                blocks.append("\n".join(rows))
+    parts, cur = [], ""
+    for b in blocks:
+        if cur and len(cur) + len(b) > DOC_PART_CHARS:
+            parts.append(cur)
+            cur = ""
+        cur = f"{cur}\n\n{b}" if cur else b
+    if cur:
+        parts.append(cur)
+    return parts or [""]
+
+
+def read_sheets(path: Path) -> list[str]:
+    """Spreadsheets and CSV: one 'page' per sheet, as a header line plus one line per row."""
+    try:
+        import pandas as pd
+    except ImportError as e:
+        raise KnowledgeError("Reading spreadsheets needs pandas: pip install -r requirements.txt") from e
+    try:
+        ext = path.suffix.lower()
+        if ext in (".csv", ".tsv"):
+            sheets = {path.stem: pd.read_csv(path, sep="\t" if ext == ".tsv" else None, engine="python",
+                                             nrows=SHEET_ROW_LIMIT)}
+        else:
+            sheets = pd.read_excel(path, sheet_name=None, nrows=SHEET_ROW_LIMIT)
+    except Exception as e:
+        raise KnowledgeError(f"Couldn't read the table: {type(e).__name__}: {e}") from e
+    pages = []
+    for name, df in sheets.items():
+        df = df.dropna(how="all").dropna(axis=1, how="all")
+        cols = [str(c) for c in df.columns]
+        lines = [f"Sheet {name}: {len(df):,} rows, columns: {', '.join(cols)}"]
+        for row in df.astype(str).itertuples(index=False):
+            lines.append("; ".join(f"{c}: {v}" for c, v in zip(cols, row) if v not in ("nan", "NaT", "")))
+        pages.append("\n\n".join(lines))   # blank lines let rows chunk cleanly
+    return pages or [""]
+
+
+def read_notebook(path: Path) -> list[str]:
+    """Jupyter notebooks: markdown and code cells in order (outputs left out)."""
+    import json
+    try:
+        nb = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as e:
+        raise KnowledgeError(f"Couldn't read the notebook: {e}") from e
+    cells = []
+    for c in nb.get("cells", []):
+        src = "".join(c.get("source") or [])
+        if src.strip():
+            cells.append(src if c.get("cell_type") == "markdown" else f"```python\n{src}\n```")
+    return ["\n\n".join(cells)]
+
+
 def read_pages(path: Path) -> list[str]:
     """Text per page (PDF), per slide (PowerPoint), or one 'page' for a text file."""
     suffix = path.suffix.lower()
@@ -104,6 +198,14 @@ def read_pages(path: Path) -> list[str]:
     if suffix == ".ppt":
         raise KnowledgeError("Old .ppt files can't be read. Open it in PowerPoint or Keynote "
                              "and save it as .pptx.")
+    if suffix in DOC_FORMATS:
+        return read_docx(path)
+    if suffix in SHEET_FORMATS:
+        return read_sheets(path)
+    if suffix == ".ipynb":
+        return read_notebook(path)
+    if suffix in IMAGE_FORMATS:
+        raise KnowledgeError("Images are read by a vision model while indexing.")  # handled in index()
     if suffix == ".pdf":
         from pypdf import PdfReader
         try:
@@ -164,6 +266,8 @@ class KnowledgeBase:
         self.store = store
         self.embedder = embedder
         self.files_dir = files_dir
+        # Set by MemorySystem: describes an image (text in it, what it shows) with a vision model.
+        self.describe_image: Callable[[Path], Awaitable[str | None]] | None = None
         files_dir.mkdir(parents=True, exist_ok=True)
 
     # ------------------------------------------------------------- listing
@@ -203,7 +307,7 @@ class KnowledgeBase:
             raise KnowledgeError(f"'{name}' is an old .ppt file. Save it as .pptx first "
                                  "(PowerPoint or Keynote: File → Save As / Export).")
         if suffix not in SUPPORTED:
-            raise KnowledgeError(f"'{name}' isn't supported. Use PDF, PowerPoint (.pptx), "
+            raise KnowledgeError(f"'{name}' isn't supported. Use PDF, Word (.docx), PowerPoint (.pptx), Excel/CSV, code, images, "
                                  "Markdown or TXT.")
         digest = hashlib.sha256(source.read_bytes()).hexdigest()
         existing = self.store.one("SELECT * FROM documents WHERE sha256 = ?", (digest,))
@@ -235,7 +339,14 @@ class KnowledgeBase:
 
         try:
             await update(status="reading", progress=0.05, error=None)
-            pages = await asyncio.to_thread(read_pages, Path(doc["path"]))
+            if Path(doc["path"]).suffix.lower() in IMAGE_FORMATS:
+                described = await self.describe_image(Path(doc["path"])) if self.describe_image else None
+                if not described:
+                    raise KnowledgeError("No vision model could read this image. Install one with: "
+                                         "ollama pull qwen3.5:4b (or gemma3, llava).")
+                pages = [described]
+            else:
+                pages = await asyncio.to_thread(read_pages, Path(doc["path"]))
             if sum(len(p.strip()) for p in pages) < 20:
                 raise KnowledgeError("No readable text found. It may be a scanned image "
                                      "(OCR isn't supported yet).")

@@ -58,6 +58,15 @@ def artifacts_in(output: str) -> list[dict[str, str]]:
     return out
 
 
+def _with_skill(goal: str, playbook: str | None) -> str:
+    """A skill's playbook + what you typed after the /command."""
+    if not playbook:
+        return goal
+    if "{{input}}" in playbook:
+        return playbook.replace("{{input}}", goal).strip()
+    return f"{playbook}\n\nWhat the user added: {goal}" if goal else playbook
+
+
 class ChatModel(Protocol):
     """What the engine needs from a model backend (OllamaClient, or a fake in tests)."""
 
@@ -73,7 +82,7 @@ class AetherAgent:
     def __init__(self, settings: Settings | None = None, *, llm: ChatModel | None = None,
                  registry: ToolRegistry = REGISTRY, broker: ApprovalBroker | None = None,
                  memory_provider: MemoryProvider | None = None,
-                 after_turn: AfterTurn | None = None):
+                 after_turn: AfterTurn | None = None, tool_index: Any = None):
         self.settings = settings or get_settings()
         self.llm: ChatModel = llm or OllamaClient(self.settings.ollama_url,
                                                   timeout_s=self.settings.request_timeout_s)
@@ -81,6 +90,7 @@ class AetherAgent:
         self.broker = broker or ApprovalBroker(self.settings.approval_timeout_s)
         self.memory_provider = memory_provider
         self.after_turn = after_turn
+        self.tool_index = tool_index  # tool_router.ToolIndex: match tools by meaning (optional)
         self.model: str | None = None
         self.model_note: str | None = None  # explains a fallback model choice, if any
 
@@ -101,8 +111,13 @@ class AetherAgent:
 
     # ------------------------------------------------------------------ loop
     async def run(self, goal: str, session: Session, *, run_id: str | None = None,
-                  images: list[str] | None = None) -> AsyncIterator[AgentEvent]:
-        """Work on `goal`. `images` are base64-encoded pictures sent with it (vision)."""
+                  images: list[str] | None = None, reasoning: str | None = None,
+                  skill: str | None = None, skill_prompt: str | None = None,
+                  force_tools: list[str] | None = None) -> AsyncIterator[AgentEvent]:
+        """Work on `goal`. `images` are base64-encoded pictures sent with it (vision).
+        `reasoning`: "low" | "medium" | "high" for models that think (gpt-oss takes the level;
+        other thinking models think for medium/high). `skill_prompt`: a skill's playbook, sent to
+        the model with the goal (the chat keeps just what you typed); `force_tools` always offered."""
         run_id = run_id or uuid.uuid4().hex[:12]
         s = self.settings
         step = 0
@@ -113,6 +128,11 @@ class AetherAgent:
 
         try:
             model = await self.ensure_model()
+            # Your PC is off or unreachable: answer on this Mac instead of failing.
+            failover = getattr(self.llm, "failover", None)
+            failover_note = None
+            if failover is not None:
+                model, failover_note = await failover(model, [s.model, *s.fallback_models])
             switched_for_vision = False
             if images:
                 vision_model = await self._vision_model(model)
@@ -124,7 +144,11 @@ class AetherAgent:
                 model = vision_model
             limit_fn = getattr(self.llm, "context_limit", None)
             stats = RunStats(model=model, context_limit=limit_fn(model) if limit_fn else s.context_length)
-            yield ev(EventType.STATUS, state=AgentState.THINKING, run_id=run_id, model=model)
+            think = await self._think_value(model, reasoning)
+            yield ev(EventType.STATUS, state=AgentState.THINKING, run_id=run_id, model=model,
+                     reasoning=think if isinstance(think, str) else ("on" if think else None))
+            if failover_note:
+                yield ev(EventType.THOUGHT, kind="info", text=failover_note)
             if switched_for_vision:
                 yield ev(EventType.THOUGHT, kind="info",
                          text=f"Looking at your image{'s' * (len(images or []) > 1)} with {model} "
@@ -134,17 +158,24 @@ class AetherAgent:
             # What's saved to history: the text, plus a note of how many images there were
             # (images themselves are big and only needed for this turn).
             user_saved: dict[str, Any] = {"role": "user", "content": goal}
+            meta: dict[str, Any] = {}
             if images:
-                user_saved["meta"] = {"images": len(images)}
+                meta["images"] = len(images)
+            if skill:
+                meta["skill"] = skill
+            if meta:
+                user_saved["meta"] = meta
             turn: list[dict[str, Any]] = [user_saved]
-            user_for_model: dict[str, Any] = {"role": "user", "content": goal}
+            typed = goal[len(skill) + 1:].strip() if skill and goal.lower().startswith(f"/{skill}") else goal
+            user_for_model: dict[str, Any] = {"role": "user",
+                                              "content": _with_skill(typed, skill_prompt) if skill_prompt else goal}
             if images:
                 user_for_model["images"] = images
             messages: list[dict[str, Any]] = [
                 {"role": "system", "content": build_system_prompt(
                     agent_name=s.agent_name, user_name=s.user_name, memory_context=memory_context)},
                 *session.history(s.history_chars), user_for_model]
-            offered = self._route_tools(goal, session, model, bool(images))
+            offered = await self._route_tools(goal, session, model, bool(images), force_tools)
             tools = [self.registry.get(n).schema() for n in offered if self.registry.get(n)]  # type: ignore[union-attr]
             if len(offered) < len(self.registry.names):
                 yield ev(EventType.STATUS, state=AgentState.THINKING, tools=offered)
@@ -162,7 +193,7 @@ class AetherAgent:
                 calls: list[dict[str, Any]] = []
                 cut_off = False
                 stream = self.llm.chat_stream(model=model, messages=messages, tools=tools,
-                                              options=self._options, think=s.think)
+                                              options=self._options, think=think)
                 # Cloud providers report usage (what you're billed) only at the very end of a stream,
                 # so their streams are never cut short; the early stop is for small local models.
                 cloud = getattr(self.llm, "is_cloud", lambda _m: False)(model)
@@ -221,8 +252,8 @@ class AetherAgent:
                     break
 
                 # ---- a tool step ----
-                if content or thinking:
-                    yield ev(EventType.THOUGHT, text=content or thinking)
+                if content:  # what it said before the tool call (its thinking streams separately)
+                    yield ev(EventType.THOUGHT, text=content)
                 normalized = [self._normalize_call(c) for c in calls]
                 # Keep the backend's call ids: cloud APIs pair each result with its call by id.
                 assistant_msg = {"role": "assistant", "content": content,
@@ -249,6 +280,13 @@ class AetherAgent:
                                 "content": result.output if result.ok else f"ERROR: {result.output}"}
                     messages.append(tool_msg)
                     turn.append(tool_msg)
+                    # The agent loaded a pack mid-task: its tools are offered from the next step.
+                    if name == "list_available_capabilities" and result.ok and args.get("pack"):
+                        more = self._pack_tools(str(args["pack"]))
+                        if any(n not in offered for n in more):
+                            offered = list(dict.fromkeys([*offered, *more]))
+                            tools = [self.registry.get(n).schema() for n in offered if self.registry.get(n)]  # type: ignore[union-attr]
+                            yield ev(EventType.STATUS, state=AgentState.THINKING, tools=offered)
                 yield ev(EventType.STATUS, state=AgentState.THINKING)
 
             if answer is None:
@@ -298,23 +336,52 @@ class AetherAgent:
             self.broker.cancel_run(run_id)
 
     # --------------------------------------------------------------- helpers
-    def _route_tools(self, goal: str, session: Session, model: str, has_images: bool) -> list[str]:
-        """All tools for cloud models; the 6–8 most relevant for local (Ollama) ones."""
-        everything = [t.name for t in self.registry.all()]
+    async def _think_value(self, model: str, reasoning: str | None) -> bool | str:
+        """What to send as Ollama's `think`: a level for gpt-oss, on/off for other thinking models."""
+        if reasoning not in ("low", "medium", "high"):
+            return self.settings.think
+        caps_fn = getattr(self.llm, "capabilities", None)
+        caps = await caps_fn(model) if caps_fn else set()
+        if "thinking" not in caps:
+            return False
+        if "gpt-oss" in model:
+            return reasoning
+        return reasoning in ("medium", "high")
+
+    async def _route_tools(self, goal: str, session: Session, model: str, has_images: bool,
+                           force_tools: list[str] | None = None) -> list[str]:
+        """All enabled tools for cloud models; the 6–8 most relevant (+ the meta-tool) for local ones."""
+        try:
+            from tool_router import enabled, route
+        except ImportError:  # backend/ not on the path (embedded use): no routing
+            return [t.name for t in self.registry.all()]
+        everything = [t.name for t in self.registry.all() if enabled(t.name, t)]
         if not self.settings.tool_router or getattr(self.llm, "is_cloud", lambda _m: False)(model):
             return everything
-        try:
-            from tool_router import route
-        except ImportError:  # backend/ not on the path (embedded use): no routing
-            return everything
+        similarity: dict[str, float] = {}
+        if self.tool_index is not None:
+            try:
+                similarity = await asyncio.wait_for(self.tool_index.similarities(goal, self.registry.all()), 4)
+            except Exception:  # the embedding model is optional: keywords still work
+                similarity = {}
         recent = {c.get("function", {}).get("name") for turn in session.turns[-3:] for m in turn
                   for c in (m.get("tool_calls") or [])}
         names = route(goal, self.registry.all(), max_tools=self.settings.router_max_tools,
-                      recent={n for n in recent if n}, has_images=has_images)
+                      recent={n for n in recent if n}, has_images=has_images, similarity=similarity)
         for pattern, tool_name, _ in INTENT_TOOLS:  # a quiz or PDF request must get its tool
             if pattern.search(goal) and tool_name in everything and tool_name not in names:
                 names = [tool_name, *names][: self.settings.router_max_tools]
+        forced = [t for t in (force_tools or []) if t in everything]  # a skill's own tools come first
+        if forced:
+            names = list(dict.fromkeys([*forced, *names]))[: max(self.settings.router_max_tools, len(forced))]
         return names
+
+    def _pack_tools(self, pack: str) -> list[str]:
+        try:
+            from tool_router import pack_tools
+        except ImportError:
+            return []
+        return pack_tools(pack.strip().lower(), self.registry.all())
 
     async def _vision_model(self, current: str) -> str | None:
         """The current model if it can see images, else an installed one that can."""
@@ -392,6 +459,18 @@ class AetherAgent:
             return AgentEvent(kind, data, step)
 
         spec = self.registry.get(name)
+        try:
+            from tool_router import PACKS, enabled, meta_for
+            if spec is not None and not enabled(name, spec):
+                pack = PACKS[meta_for(name, spec).pack].label
+                yield ev(EventType.TOOL_START, call_id=call_id, name=name, args=args, risk="safe", icon=spec.icon)
+                result = ToolResult(False, f"The {pack} pack is switched off by the user, so {name} can't run. "
+                                           "Use another tool or tell the user.")
+                yield ev(EventType.TOOL_RESULT, call_id=call_id, name=name, ok=False, output=result.output, duration_s=0.0)
+                out.append(result)
+                return
+        except ImportError:
+            pass
         if spec is None:
             yield ev(EventType.TOOL_START, call_id=call_id, name=name or "?", args=args,
                      risk="unknown", icon="circle-help")

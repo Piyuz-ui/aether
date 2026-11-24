@@ -3,9 +3,10 @@
 /** The message box: auto-growing input, push-to-talk mic, send / stop. */
 import clsx from "clsx";
 import { AnimatePresence, motion, useAnimate } from "framer-motion";
-import { ArrowUp, FileText, Mic, Paperclip, Square, X } from "lucide-react";
+import { ArrowUp, FileText, Mic, Paperclip, Sparkles, Square, X } from "lucide-react";
 import { forwardRef, useEffect, useImperativeHandle, useRef, useState, type ReactNode } from "react";
 
+import type { SkillInfo } from "@/lib/types";
 import { jelly } from "@/lib/motion";
 import { usePrefs } from "@/lib/prefs";
 import { ACCEPT_ATTR, type Attachment, type ImageAttachment } from "@/lib/useAttachments";
@@ -28,9 +29,19 @@ export const Composer = forwardRef<ComposerHandle, {
   onRemoveImage: (id: string) => void;
   /** Shown under the text, inside the box (the model picker). */
   toolbar?: ReactNode;
-}>(function Composer({ busy, onSend, onStop, autoSendVoice, attachments, images, indexing, onAttach, onRemoveAttachment, onRemoveImage, toolbar }, ref) {
+  /** Slash commands: typing "/" lists them. */
+  skills?: SkillInfo[];
+}>(function Composer({ busy, onSend, onStop, autoSendVoice, attachments, images, indexing, onAttach, onRemoveAttachment, onRemoveImage, toolbar, skills = [] }, ref) {
   const [text, setText] = useState("");
   const area = useRef<HTMLTextAreaElement>(null);
+  // Slash commands: "/" (or "/de…") at the start, before any space, opens the menu.
+  const [slashIndex, setSlashIndex] = useState(0);
+  const [slashClosed, setSlashClosed] = useState(false);
+  const slashQuery = /^\/([a-z0-9-]*)$/i.exec(text)?.[1]?.toLowerCase();
+  const slashMatches = slashQuery === undefined ? [] : skills.filter((s) => s.name.startsWith(slashQuery));
+  const slashOpen = !slashClosed && slashMatches.length > 0;
+  useEffect(() => { setSlashIndex(0); if (!text.startsWith("/")) setSlashClosed(false); }, [text]);
+  const pickSkill = (name: string) => { setText(`/${name} `); setSlashClosed(true); area.current?.focus(); };
   const { prefs } = usePrefs();
   const [scope, animate] = useAnimate<HTMLDivElement>();
   const flash = useRef<HTMLSpanElement>(null);
@@ -75,12 +86,37 @@ export const Composer = forwardRef<ComposerHandle, {
 
   return (
     <motion.div ref={scope} className={clsx(
-      "glass relative rounded-[26px] p-2 transition-[box-shadow,border-color] duration-300",
+      // z-30: its menus (skills, model, reasoning) open over the chat above it.
+      "glass relative z-30 rounded-[26px] p-2 transition-[box-shadow,border-color] duration-300",
       // Keep the glass rim + drop shadow as a Tailwind shadow so the focus ring adds to it.
       "shadow-[inset_1px_1px_0_0_rgba(224,242,254,0.22),0_20px_50px_rgba(2,10,28,0.55)]",
       // The whole bar glows when you type, instead of a box around the text field.
       "focus-within:border-sky-200/40 focus-within:ring-2 focus-within:ring-sky-300/35",
     )}>
+      <AnimatePresence>
+        {slashOpen && (
+          <motion.div role="listbox" aria-label="Skills" initial={{ opacity: 0, y: 8, scale: 0.97 }} animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: 6, transition: { duration: 0.12 } }} transition={jelly} style={{ transformOrigin: "bottom left" }}
+            className="glass-pop absolute bottom-full left-2 right-2 z-50 mb-2 rounded-2xl p-1.5">
+            <div className="flex items-center gap-1.5 px-2.5 pb-1.5 pt-1 text-[10.5px] uppercase tracking-[0.14em] text-mist">
+              <Sparkles className="size-3" /> Skills <span className="ml-auto normal-case tracking-normal text-mist/60">↑↓ · Enter</span>
+            </div>
+            {slashMatches.map((s, i) => (
+              <button key={s.name} type="button" role="option" aria-selected={i === slashIndex}
+                onMouseEnter={() => setSlashIndex(i)} onMouseDown={(e) => { e.preventDefault(); pickSkill(s.name); }}
+                className={clsx("flex w-full items-start gap-3 rounded-xl px-2.5 py-2 text-left transition-colors",
+                  i === slashIndex ? "bg-sky/[0.14]" : "hover:bg-white/[0.06]")}>
+                <span className="shrink-0 font-mono text-[13px] text-glacier">/{s.name}</span>
+                <span className="min-w-0 flex-1">
+                  <span className="block text-[12.5px] leading-snug text-frost/90">{s.description}</span>
+                  {s.usage && s.usage !== `/${s.name}` && <span className="block font-mono text-[10.5px] text-mist">{s.usage}</span>}
+                </span>
+                {s.reasoning && <span className="shrink-0 rounded-md bg-periwinkle/15 px-1.5 py-0.5 text-[10px] text-periwinkle">{s.reasoning} reasoning</span>}
+              </button>
+            ))}
+          </motion.div>
+        )}
+      </AnimatePresence>
       <span ref={flash} aria-hidden className="pointer-events-none absolute inset-0 rounded-[26px] opacity-0"
         style={{ boxShadow: "inset 0 0 0 1.5px rgba(125,211,252,0.7), 0 0 36px rgba(56,189,248,0.35)" }} />
       <AnimatePresence>
@@ -175,14 +211,29 @@ export const Composer = forwardRef<ComposerHandle, {
           rows={1}
           onChange={(e) => setText(e.target.value)}
           onKeyDown={(e) => {
+            if (slashOpen) {
+              if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+                e.preventDefault();
+                setSlashIndex((i) => (i + (e.key === "ArrowDown" ? 1 : slashMatches.length - 1)) % slashMatches.length);
+                return;
+              }
+              if ((e.key === "Enter" || e.key === "Tab") && !e.shiftKey) {
+                e.preventDefault();
+                pickSkill(slashMatches[slashIndex].name);
+                return;
+              }
+              if (e.key === "Escape") { e.preventDefault(); setSlashClosed(true); return; }
+            }
             if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
               e.preventDefault();
               submit();
             }
           }}
+          aria-expanded={slashOpen} aria-autocomplete="list"
           placeholder={voice.listening ? "Listening…"
             : images.length ? "Ask about the image, e.g. “save these classes to my timetable”…"
             : attachments.length ? (indexing ? "Reading your files… ask about them" : "Ask about the attached files…")
+            : skills.length ? "Ask AETHER anything, type / for skills, or drop files here…"
             : "Ask AETHER anything, or drop files here…"}
           aria-label="Message AETHER"
           className="soft-scroll max-h-[220px] min-h-10 flex-1 resize-none bg-transparent px-1 py-2.5 text-[0.95rem] leading-relaxed text-frost placeholder:text-mist/60 outline-none focus:outline-none focus-visible:outline-none focus:ring-0"

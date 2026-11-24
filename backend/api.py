@@ -71,7 +71,15 @@ def build_context(settings: Settings, llm: Any = None, db_path: str | None = Non
             return []
         return await memory.extract_facts(llm, model, goal, answer)
 
-    agent = AetherAgent(settings, llm=llm, memory_provider=memory.build_context, after_turn=learn)
+    # Match tools by meaning with the local embedding model (falls back to keywords without it).
+    from tool_router import ToolIndex
+    tool_index = ToolIndex(memory.embedder.embed_documents, memory.embedder.embed_query)
+    agent = AetherAgent(settings, llm=llm, memory_provider=memory.build_context, after_turn=learn,
+                        tool_index=tool_index)
+    # Tool packs switched off or pinned in Settings, kept in the database.
+    import tool_router
+    saved = json.loads(memory.store.get_meta("tool_packs") or "{}")
+    tool_router.set_state(saved.get("disabled", []), saved.get("pinned", []))
     if hasattr(llm, "usage_sink"):
         llm.usage_sink = memory.usage.record  # every finished cloud request → Settings → Usage
     return AppContext(settings=settings, llm=llm, memory=memory, agent=agent,
@@ -82,6 +90,8 @@ def build_context(settings: Settings, llm: Any = None, db_path: str | None = Non
 class ChatRequest(BaseModel):
     message: str = Field(min_length=1, max_length=20000)
     session_id: str | None = None
+    reasoning: Literal["low", "medium", "high"] | None = None   # for models that think
+    skill: str | None = Field(default=None, max_length=60)      # a /command from backend/skills/
     # base64 images (no "data:" prefix); up to 4, about 8 MB each
     images: list[str] = Field(default_factory=list, max_length=4)
 
@@ -147,6 +157,11 @@ class ClaudeImport(BaseModel):
 
 class ClaudeTarget(BaseModel):
     target: Literal["desktop", "code"]
+
+
+class PackPatch(BaseModel):
+    enabled: bool | None = None
+    pinned: bool | None = None
 
 
 class KeyIn(BaseModel):
@@ -291,7 +306,21 @@ def create_app(settings: Settings | None = None, *, llm: Any = None,
                 "embed_model": ctx.settings.embed_model, "embeddings_available": emb.available,
                 "embeddings_hint": emb.last_error.hint if emb.last_error else None,
                 "tools": len(REGISTRY.all()),
+                "reasoning": await reasoning_kind(ctx, model),
                 "context_length": limit_fn(model) if limit_fn and model else ctx.settings.context_length}
+
+    async def reasoning_kind(ctx: AppContext, model: str | None) -> str | None:
+        """"levels" (gpt-oss: low/medium/high), "toggle" (other thinking models) or None."""
+        caps_fn = getattr(ctx.llm, "capabilities", None)
+        if not model or caps_fn is None:
+            return None
+        try:
+            caps = await caps_fn(model)
+        except Exception:
+            return None
+        if "thinking" not in caps:
+            return None
+        return "levels" if "gpt-oss" in model else "toggle"
 
     @app.get("/api/models")
     async def models(request: Request) -> dict[str, Any]:
@@ -613,6 +642,27 @@ def create_app(settings: Settings | None = None, *, llm: Any = None,
                         "pack": meta.pack, "level": meta.level.value})
         return out
 
+    @app.get("/api/packs")
+    async def packs() -> list[dict[str, Any]]:
+        """The six tool packs: their tools, risk levels, and whether each is on or pinned."""
+        from tool_router import packs_summary
+        return packs_summary(REGISTRY.all())
+
+    @app.put("/api/packs/{pack_id}")
+    async def set_pack(pack_id: str, body: PackPatch, request: Request) -> dict[str, Any]:
+        import tool_router
+        if pack_id not in tool_router.PACKS:
+            raise HTTPException(404, detail={"message": f"There's no pack '{pack_id}'."})
+        st = tool_router.state()
+        disabled, pinned = set(st["disabled"]), set(st["pinned"])
+        if body.enabled is not None:
+            (disabled.discard if body.enabled else disabled.add)(pack_id)
+        if body.pinned is not None:
+            (pinned.add if body.pinned else pinned.discard)(pack_id)
+        tool_router.set_state(disabled, pinned)
+        ctx_of(request).memory.store.set_meta("tool_packs", json.dumps(tool_router.state()))
+        return next(p for p in tool_router.packs_summary(REGISTRY.all()) if p["id"] == pack_id)
+
     @app.get("/api/tools/route")
     async def tools_route(q: str, images: bool = False) -> dict[str, Any]:
         """Which tools a local model would be offered for this request (for debugging)."""
@@ -640,9 +690,26 @@ def create_app(settings: Settings | None = None, *, llm: Any = None,
             store.rename_session(session_id, title, source="ai")
         return title
 
+    def skills_dir(request: Request) -> Path:
+        from aether.skills import SKILLS_DIR
+        return getattr(request.app.state, "skills_dir", None) or SKILLS_DIR
+
+    @app.get("/api/skills")
+    async def skills(request: Request) -> list[dict[str, Any]]:
+        """Slash commands: every Markdown playbook in backend/skills/ (add your own there)."""
+        from aether.skills import list_skills
+        return [s.summary() for s in list_skills(skills_dir(request))]
+
     @app.post("/api/chat")
     async def chat(body: ChatRequest, request: Request) -> EventSourceResponse:
         ctx = ctx_of(request)
+        skill = None
+        if body.skill:
+            from aether.skills import load_skill
+            skill = load_skill(body.skill, skills_dir(request))
+            if skill is None:
+                raise HTTPException(404, detail={"message": f"There's no /{body.skill} skill.",
+                                                 "hint": "Type / in the message box to see them."})
         session = ctx.memory.session(body.session_id)
         if session.id in ctx.busy_sessions:
             raise HTTPException(409, detail={"message": "This chat is still answering.",
@@ -655,8 +722,11 @@ def create_app(settings: Settings | None = None, *, llm: Any = None,
                 yield {"event": "session", "id": "0",
                        "data": json.dumps({"session_id": session.id})}
                 finished = False
-                async with contextlib.aclosing(ctx.agent.run(body.message, session,
-                                                             images=body.images or None)) as events:
+                kw: dict[str, Any] = {"images": body.images or None, "reasoning": body.reasoning}
+                if skill is not None:
+                    kw |= {"skill": skill.name, "skill_prompt": skill.prompt, "force_tools": skill.tools,
+                           "reasoning": skill.reasoning or body.reasoning}
+                async with contextlib.aclosing(ctx.agent.run(body.message, session, **kw)) as events:
                     async for event in events:
                         seq += 1
                         finished = finished or event.type.value == "done"

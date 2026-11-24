@@ -9,6 +9,8 @@ auto-extracts new long-term facts after each answer.
 """
 from __future__ import annotations
 
+from pathlib import Path
+
 import re
 from datetime import date, timedelta
 from typing import Any
@@ -51,9 +53,33 @@ class MemorySystem:
         self.facts = FactMemory(self.store, self.embedder)
         self.tasks = TaskBook(self.store)
         self.knowledge = KnowledgeBase(self.store, self.embedder, settings.data_dir / "knowledge")
+        self.knowledge.describe_image = self._describe_image
+        self._vision_backend = backend
         self.quizzes = QuizBook(self.store, self.facts)
         from ..usage import UsageBook
         self.usage = UsageBook(self.store)
+
+    async def _describe_image(self, path: Path) -> str | None:
+        """Turn an image into searchable text with a local vision model: every piece of text in it
+        (verbatim), then what it shows. None if no vision model is installed."""
+        import base64
+        backend = self._vision_backend
+        finder = getattr(backend, "find_model_with", None)
+        if finder is None or not hasattr(backend, "chat_stream"):
+            return None
+        model = await finder("vision", prefer=self.settings.vision_model)
+        if not model:
+            return None
+        b64 = base64.b64encode(path.read_bytes()).decode()
+        prompt = ("Transcribe ALL text visible in this image exactly (headings, labels, tables, handwriting), "
+                  "then describe what it shows in a few sentences: the type of image, the key content, any "
+                  "numbers, dates or names. Plain text, no commentary.")
+        out: list[str] = []
+        async for d in backend.chat_stream(model=model, messages=[{"role": "user", "content": prompt, "images": [b64]}],
+                                           tools=None, options={"temperature": 0.1, "num_predict": 1500}, think=False):
+            out.append(d.content)
+        text = "".join(out).strip()
+        return f"[Image read by {model}]\n{text}" if text else None
 
     def session(self, session_id: str | None = None) -> PersistentSession:
         return PersistentSession(self.store, session_id)

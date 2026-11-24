@@ -9,10 +9,10 @@ import { useCallback, useEffect, useState } from "react";
 import { api, ApiError } from "./api";
 import type { KnowledgeDoc } from "./types";
 
-export const ACCEPTED = /\.(pdf|pptx|md|markdown|txt)$/i;
+export const ACCEPTED = /\.(pdf|docx|pptx|md|markdown|txt|ipynb|py|js|ts|tsx|jsx|java|c|h|cpp|hpp|cs|go|rs|rb|php|swift|kt|sql|sh|yaml|yml|toml|html|css|xml|tex)$/i;
 export const DATA = /\.(csv|tsv|xlsx|xlsm|json)$/i;   // tables for analyze_csv / python_sandbox
 export const IMAGE = /\.(png|jpe?g|webp|gif|heic|heif)$/i;
-export const ACCEPT_ATTR = ".pdf,.pptx,.md,.markdown,.txt,.csv,.tsv,.xlsx,.json,image/*";
+export const ACCEPT_ATTR = ".pdf,.docx,.pptx,.md,.markdown,.txt,.ipynb,.py,.js,.ts,.java,.cpp,.go,.rs,.sql,.csv,.tsv,.xlsx,.json,image/*";
 const MAX_SIDE = 1600;
 
 export type ImageAttachment = { id: string; name: string; dataUrl: string };
@@ -78,7 +78,7 @@ export function useAttachments(onError: (title: string, body?: string) => void) 
       onError("Some files were skipped",
         rejected.some((f) => /\.ppt$/i.test(f.name))
           ? "Old .ppt files: save them as .pptx first."
-          : `Supported: PDF, PowerPoint (.pptx), Markdown, TXT, and data files (CSV, Excel, JSON). Skipped: ${rejected.map((f) => f.name).join(", ")}`);
+          : `Supported: PDF, Word, PowerPoint, Markdown, text, code, and data files (CSV, Excel, JSON). Skipped: ${rejected.map((f) => f.name).join(", ")}`);
     }
     if (!ok.length) return;
     setUploading(true);

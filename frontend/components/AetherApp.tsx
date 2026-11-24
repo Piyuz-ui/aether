@@ -3,11 +3,11 @@
 import { AnimatePresence, motion, useTransform, type MotionValue } from "framer-motion";
 import clsx from "clsx";
 import {
-  AlertTriangle, BookOpen, Brain, Calculator, CalendarRange, Globe, Library, PanelLeft, PanelRight, Plus, RefreshCw, UploadCloud, Waves, Wrench, type LucideIcon,
+  AlertTriangle, BookOpen, Brain, CalendarRange, ChartColumn, Globe, Library, PanelLeft, PanelRight, Plus, RefreshCw, UploadCloud, Waves, Wrench, type LucideIcon,
 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { cloudProvider, remoteHost } from "@/lib/cloud";
+import { cloudProvider, hostLabel, remoteHost } from "@/lib/cloud";
 import { api, ApiError } from "@/lib/api";
 import { ArtifactContext } from "@/lib/artifacts";
 import { jelly, popIn } from "@/lib/motion";
@@ -29,6 +29,7 @@ import { MessageView, spokenText } from "./MessageView";
 import { FeedbackContext } from "./Feedback";
 import { ChatSidebar } from "./ChatSidebar";
 import { ModelSwitcher } from "./ModelSwitcher";
+import { ReasoningPill } from "./Reasoning";
 import { UsagePanel } from "./panels/UsagePanel";
 import { LandingContext, SendGhost, type Flight, type Rect } from "./SendFlight";
 import { MemoryPanel } from "./panels/MemoryPanel";
@@ -43,7 +44,7 @@ const SUGGESTIONS = [
   { icon: Globe, title: "Research & save", text: "Research what's new in Python 3.15 and save a short note with sources." },
   { icon: CalendarRange, title: "Plan my week", text: "What deadlines and classes do I have this week? Help me plan around them." },
   { icon: BookOpen, title: "Study my notes", text: "Quiz me on my uploaded notes, one question at a time." },
-  { icon: Calculator, title: "Quick maths", text: "What's 17.5% of 2480, split between 3 people?" },
+  { icon: ChartColumn, title: "Data & plot", text: "Plot my study hours this week as a bar chart: Mon 2, Tue 3.5, Wed 1, Thu 4, Fri 2.5, Sat 5, Sun 3." },
 ];
 
 function greeting() {
@@ -65,35 +66,81 @@ function LiveDot({ state, online }: { state: AgentState; online: boolean }) {
 }
 
 /** Whisper-quiet proof that this is a stateful agent: tools · documents · memories. */
-function AgentStats({ tools, revision }: { tools: number; revision: number }) {
+const PACKS: Record<string, string> = { core: "Your stuff", research: "Research", code_data: "Code & data", mcp: "MCP servers" };
+const LEVEL_TONE: Record<string, string> = { SAFE: "text-seafoam", WRITE: "text-glacier", HIGH_RISK: "text-amber" };
+
+/** Whisper-quiet proof that this is a stateful agent: tools · documents · memories. Each one opens
+ *  its place: docs → Vault, memories → Memory, tools → which packs exist and how risky they are. */
+function AgentStats({ tools, revision, onOpenTab }: { tools: number; revision: number; onOpenTab: (t: DrawerTab) => void }) {
   const docs = useLive(api.documents, revision, 30_000);
   const facts = useLive(api.facts, revision, 30_000);
+  const [packsOpen, setPacksOpen] = useState(false);
+  const toolList = useLive(api.tools, revision);
   const ready = docs.data?.filter((d) => d.status === "ready").length;
-  const items: [LucideIcon, string, number | undefined][] = [
-    [Wrench, "tools", tools],
-    [Library, "docs", ready],
-    [Brain, "memories", facts.data?.length],
+  const packs = Object.entries((toolList.data ?? []).reduce<Record<string, Record<string, number>>>((acc, t) => {
+    const p = (acc[t.pack ?? "core"] ??= {});
+    p[t.level ?? "SAFE"] = (p[t.level ?? "SAFE"] ?? 0) + 1;
+    return acc;
+  }, {}));
+  const items: [LucideIcon, string, number | undefined, () => void][] = [
+    [Wrench, "tools", tools, () => setPacksOpen((o) => !o)],
+    [Library, "docs", ready, () => onOpenTab("vault")],
+    [Brain, "memories", facts.data?.length, () => onOpenTab("memory")],
   ];
   return (
-    <div className="hidden items-center gap-3 pr-1 font-mono text-[11px] text-mist/85 md:flex" aria-label="Agent state">
-      {items.map(([Icon, label, n]) => (
-        <span key={label} className="inline-flex items-center gap-1 whitespace-nowrap">
+    <div className="relative hidden items-center gap-1 pr-1 font-mono text-[11px] text-mist/85 md:flex" aria-label="Agent state">
+      {items.map(([Icon, label, n, open]) => (
+        <button key={label} type="button" onClick={open} title={label === "tools" ? "See tool packs" : `Open ${label === "docs" ? "the Vault" : "Memory"}`}
+          className="inline-flex items-center gap-1 whitespace-nowrap rounded-lg px-1.5 py-1 transition-colors hover:bg-white/[0.07] hover:text-frost">
           <Icon className="size-3 text-glacier/70" />
           <span className="text-frost/85">{n ?? "–"}</span> {n === 1 ? label.replace(/s$/, "") : label}
-        </span>
+        </button>
       ))}
+      <AnimatePresence>
+        {packsOpen && (
+          <motion.div initial={{ opacity: 0, y: -6, scale: 0.96 }} animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: -4, transition: { duration: 0.12 } }} transition={jelly} style={{ transformOrigin: "top left" }}
+            className="glass-pop absolute left-0 top-full z-50 mt-2 w-64 rounded-2xl p-3 font-sans">
+            <div className="mb-2 text-[10.5px] uppercase tracking-[0.14em] text-mist">Tool packs</div>
+            <div className="space-y-1.5">
+              {packs.map(([pack, levels]) => (
+                <div key={pack} className="flex items-center gap-2 text-[12px]">
+                  <span className="flex-1 text-frost">{PACKS[pack] ?? pack}</span>
+                  {Object.entries(levels).map(([lvl, n]) => (
+                    <span key={lvl} className={clsx("font-mono text-[10.5px]", LEVEL_TONE[lvl])} title={lvl.replace("_", " ").toLowerCase()}>
+                      {n} {lvl === "HIGH_RISK" ? "risky" : lvl.toLowerCase()}
+                    </span>
+                  ))}
+                </div>
+              ))}
+            </div>
+            <p className="mt-2.5 text-[10.5px] leading-snug text-mist">
+              Local models get only the 6–8 most relevant tools per message; risky ones always ask you first.
+            </p>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }
 
-function EmptyState({ state, onPick, level }: { state: AgentState; onPick: (t: string) => void; level: MotionValue<number> }) {
+/** Where answers come from, in the hero text. */
+function whereItRuns(model?: string | null): string {
+  const cloud = cloudProvider(model);
+  if (cloud) return `with ${cloud} in the cloud for this chat`;
+  const host = remoteHost(model);
+  if (host) return `on your ${hostLabel(host)}'s GPU over your own network`;
+  return "all on this Mac";
+}
+
+function EmptyState({ state, onPick, level, model }: { state: AgentState; onPick: (t: string) => void; level: MotionValue<number>; model?: string | null }) {
   return (
     <motion.div variants={popIn} initial="hidden" animate="show" className="mx-auto flex max-w-2xl flex-col items-center px-4 pt-[8vh] text-center">
       <AgentOrb state={state} size={132} level={level} />
       <h1 className="mt-10 text-3xl font-semibold tracking-tight text-frost sm:text-4xl">{greeting()}</h1>
       <p className="mt-3 max-w-md text-balance text-[15px] leading-relaxed text-mist">
         I&apos;m AETHER, your local study, research and productivity agent. I can search the web, read your
-        notes, track deadlines and remember what matters, all on this computer.
+        notes, track deadlines and remember what matters, {whereItRuns(model)}.
       </p>
       <div className="mt-9 grid w-full gap-3 sm:grid-cols-2">
         {SUGGESTIONS.map((s, i) => (
@@ -122,7 +169,7 @@ function runsOn(model?: string | null): string {
   const cloud = cloudProvider(model);
   if (cloud) return `Runs on ${cloud} in the cloud: your messages go there`;
   const host = remoteHost(model);
-  if (host) return `Runs on ${host} over your own network`;
+  if (host) return `Runs on your ${hostLabel(host)} over your own network`;
   return "Runs locally on Ollama";
 }
 
@@ -198,14 +245,16 @@ export function AetherApp() {
       goal = `${goal.trim() || "Summarise the attached files."}\n\n(Attached to my Knowledge Vault just now: ${ready.map((a) => a.filename).join(", ")}. Search them to answer.)`;
     }
     if (tables.length) {
-      goal = `${goal.trim() || "Analyse the attached data."}\n\n(Data file${tables.length > 1 ? "s" : ""} attached: ${tables.map((a) => a.path).join(", ")}. Inspect with analyze_csv; use python_sandbox for charts.)`;
+      goal = `${goal.trim() || "Analyse the attached data."}\n\n(Data file${tables.length > 1 ? "s" : ""} attached: ${tables.map((a) => a.path).join(", ")}. Inspect with analyze_dataset; use python_sandbox for charts.)`;
     }
     files.clear();
     const userId = `u-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
     const shown = goal.trim() || (images.length ? "What's in this image?" : "");
     // The text lifts off the box and glides into the chat (skipped in calm mode).
     if (from && shown && !prefs.calm) setFlight({ id: userId, text: shown, from });
-    void agent.send(goal, images, { userId });
+    const skill = /^\/([a-z][a-z0-9-]*)(?:\s|$)/.exec(goal.trim())?.[1] ?? null;
+    void agent.send(goal, images, { userId, skill: skill && skillNames.has(skill) ? skill : null,
+      reasoning: health?.reasoning ? prefs.reasoning : null });
   }
 
   // Each reply's place in the chat (0 = first), and "ask again" for the 👎 under it.
@@ -256,6 +305,12 @@ export function AetherApp() {
   const planeY = useTransform(parallax.y, (v) => v * -5);
 
   const state: AgentState = agent.busy ? agent.agentState : "idle";
+  const skills = useLive(api.skills, agent.revision);
+  const skillNames = new Set((skills.data ?? []).map((s) => s.name));
+  // The model the latest answer actually ran on (it can differ from the selected one: if the PC
+  // couldn't be reached, AETHER answered on this Mac). Hero + footer follow it.
+  const lastReply = [...agent.messages].reverse().find((m) => m.role === "assistant");
+  const runModel = (lastReply?.role === "assistant" && lastReply.model) || health?.model;
   const empty = agent.messages.length === 0;
 
   return (
@@ -298,7 +353,7 @@ export function AetherApp() {
                     <UploadCloud className="size-10 text-glacier" />
                   </motion.div>
                   <div className="mt-3 text-lg font-semibold text-frost">Drop to add to AETHER</div>
-                  <div className="mt-1 text-sm text-mist">Images · PDF · PowerPoint (.pptx) · Markdown · TXT</div>
+                  <div className="mt-1 text-sm text-mist">Images · PDF · Word · PowerPoint · Excel/CSV · Markdown · code</div>
                 </motion.div>
               </motion.div>
             )}
@@ -328,7 +383,8 @@ export function AetherApp() {
 
                 </div>
               </div>
-              {health?.ok && <AgentStats tools={health.tools} revision={agent.revision} />}
+              {health?.ok && <AgentStats tools={health.tools} revision={agent.revision}
+                onOpenTab={(t) => { setTab(t); setPref("drawerOpen", true); }} />}
               <IconButton label="New chat" hint="Start a fresh conversation" onClick={() => { agent.newChat(); composer.current?.focus(); }}>
                 <Plus className="size-[18px]" />
               </IconButton>
@@ -363,7 +419,7 @@ export function AetherApp() {
           {/* conversation */}
           <div ref={scroller} className="soft-scroll min-h-0 flex-1 overflow-y-auto">
             {empty ? (
-              <EmptyState state={state} level={voice.level} onPick={(t) => composer.current?.fill(t)} />
+              <EmptyState state={state} level={voice.level} model={runModel} onPick={(t) => composer.current?.fill(t)} />
             ) : (
               <LandingContext.Provider value={flight?.id ?? null}>
                 <div className="mx-auto flex max-w-3xl flex-col gap-6 px-4 py-8 sm:px-6">
@@ -382,13 +438,17 @@ export function AetherApp() {
                 autoSendVoice={prefs.autoSendVoice} attachments={files.items} images={files.images}
                 indexing={files.indexing || files.uploading}
                 onAttach={(f) => void files.add(f)} onRemoveAttachment={files.remove} onRemoveImage={files.removeImage}
+                skills={skills.data ?? []}
                 toolbar={health?.model ? (
-                  <ModelSwitcher up current={health.model} disabled={agent.busy} toast={toast}
-                    onOpenSettings={() => { setTab("settings"); setPref("drawerOpen", true); }}
-                    onSwitched={(m) => { setHealth((h) => (h ? { ...h, model: m, model_note: null } : h)); void loadHealth(); }} />
+                  <>
+                    <ModelSwitcher up current={health.model} disabled={agent.busy} toast={toast}
+                      onOpenSettings={() => { setTab("settings"); setPref("drawerOpen", true); }}
+                      onSwitched={(m) => { setHealth((h) => (h ? { ...h, model: m, model_note: null } : h)); void loadHealth(); }} />
+                    {health.reasoning && <ReasoningPill kind={health.reasoning} disabled={agent.busy} />}
+                  </>
                 ) : undefined} />
               <p className="mt-2 text-center text-[11px] text-mist/75">
-                {runsOn(health?.model)} · risky actions always ask first
+                {runsOn(runModel)} · risky actions always ask first
               </p>
             </div>
           </div>

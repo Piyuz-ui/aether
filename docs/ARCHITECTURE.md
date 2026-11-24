@@ -274,3 +274,14 @@ The final assistant message of each turn carries `meta.stats`: model, model call
 ## AETHER as an MCP server
 
 `backend/mcp_server.py` speaks MCP over stdio and offers AETHER's study tools (knowledge base, memory, tasks, timetable, notes, PDFs) to any MCP client. Settings can register it with Claude Desktop or Claude Code in one click. The client side (`aether/mcp/client.py`) connects to local stdio servers and to remote Streamable HTTP servers.
+
+
+## Tool packs and the router (`backend/tool_router.py`)
+
+Small local models pick tools far more reliably from 7 options than from 26, so tools are grouped into six packs (`system_mac`, `knowledge_rag`, `code_data`, `research_web`, `productivity`, `mcp_bridge`), each tool tagged and given a level (`SAFE`, `WRITE`, `HIGH_RISK`). Per message:
+
+1. **Score** every enabled tool: tag hits ×3, name hits ×2, a little description overlap, and a **meaning** bonus. Tool texts and the prompt are embedded with `nomic-embed-text` (tool vectors are cached), and tools whose similarity stands out (z-score above the mean) gain up to a few points. Recent tools, pinned packs and obvious signals (a `.csv`, a URL, a YouTube link, an image) add more.
+2. **Pick** the top 6–8, pull in companions (`analyze_dataset` → `python_sandbox`, `web_search` → `read_webpage`…), and top up with defaults for small talk.
+3. **Always add** `list_available_capabilities`. When the agent calls it with a pack, the engine adds that pack's tools for the rest of the task.
+
+Switched-off packs are excluded from routing *and* refused at execution, even if a model names one of their tools. Cloud models get every enabled tool.

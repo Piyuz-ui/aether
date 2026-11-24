@@ -47,3 +47,30 @@ def list_documents() -> str:
         status = d["status"] if d["status"] != "ready" else f"ready, {d['chunks']} passages"
         lines.append(f"- {d['filename']} ({d['pages']} pages, {status})")
     return "\n".join(lines)
+
+
+@tool(description=(
+    "Add a file from the workspace (e.g. something the user saved in uploads/) to the knowledge vault, "
+    "so it can be searched and cited. Reads PDF, Word (.docx), PowerPoint (.pptx), Excel/CSV, Markdown, "
+    "text, code files and notebooks, and images (screenshots, photos of notes: read by a local vision model)."),
+    params={"path": "The file's path in the workspace, e.g. uploads/report.docx"},
+    category="knowledge", icon="file-plus", timeout_s=240)
+async def ingest_any_file(path: str) -> str:
+    from ..memory.knowledge import KnowledgeError, citation_unit
+    from .context import workspace
+    target = workspace().resolve(path, must_exist=True)
+    if not target.is_file():
+        raise ToolError(f"'{path}' is a folder. Give a file, e.g. uploads/notes.docx.")
+    kb = memory().knowledge
+    try:
+        doc, is_new = kb.register(target, filename=target.name)
+        if is_new or doc["status"] != "ready":
+            doc = await kb.index(doc["id"])
+    except KnowledgeError as e:
+        raise ToolError(str(e)) from e
+    if doc.get("status") == "error":
+        raise ToolError(doc.get("error") or "Indexing failed.")
+    unit = citation_unit(doc["filename"])
+    where = "" if unit == "image" else f" from {doc.get('pages') or 1} {'page' if unit == 'p.' else unit}(s)"
+    return (f"{'Added' if is_new else 'Already in the vault:'} {doc['filename']}: {doc.get('chunks', 0)} passages"
+            f"{where}. Search it with search_knowledge_base (document=\"{doc['filename']}\").")
