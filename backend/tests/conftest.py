@@ -104,10 +104,13 @@ class FakeLLM:
     async def chat_stream(self, *, model: str, messages: list[dict[str, Any]],
                           tools: list[dict[str, Any]] | None = None,
                           options: dict[str, Any] | None = None, think: bool = False):
-        self.requests.append({"messages": [dict(m) for m in messages], "tools": tools})
+        self.requests.append({"messages": [dict(m) for m in messages], "tools": tools,
+                              "options": dict(options or {}), "think": think})
         reply = self.replies.pop(0)
         if isinstance(reply, Exception):
             raise reply
+        if reply.get("thinking"):  # a thinking model's reasoning channel
+            yield ChatDelta(thinking=reply["thinking"])
         text = reply.get("content", "")
         for i in range(0, len(text), 7):  # stream in small chunks
             yield ChatDelta(content=text[i:i + 7])

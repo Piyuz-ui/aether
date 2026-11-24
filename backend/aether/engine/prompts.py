@@ -76,6 +76,16 @@ CUT_OFF_MESSAGE = (
     "Your last reply was cut off because it was far too long. You were probably repeating "
     "yourself. Try again concisely: call at most one or two tools, or answer in a few sentences.")
 
+SALVAGE_MESSAGE = (
+    "You used all your output room on reasoning before writing any answer. Here is your reasoning "
+    "so far:\n<reasoning>\n{reasoning}\n</reasoning>\n"
+    "Now write the final answer for the user directly, building on that reasoning. Don't start "
+    "the reasoning over. If code is needed, give complete, working code.")
+
+THINKING_RAN_OUT = (
+    "I ran out of room while thinking it through and couldn't finish an answer. Try Reasoning: Med "
+    "(or Low), or ask for a shorter or more focused answer.")
+
 STEP_LIMIT_MESSAGE = (
     "You've reached the step limit. Don't call any more tools. Using what you've found so far, "
     "give the user your best final answer now, and say briefly what's still unfinished.")

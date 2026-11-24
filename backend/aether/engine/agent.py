@@ -22,7 +22,7 @@ from ..llm.parsing import (ToolCallParseError, extract_tool_calls, looks_like_fa
                            parse_arguments, strip_thinking)
 from ..metrics import RunStats
 from ..tools import REGISTRY, Risk, ToolRegistry, ToolResult
-from .prompts import (CUT_OFF_MESSAGE, FORMAT_RETRY_MESSAGE, STEP_LIMIT_MESSAGE,
+from .prompts import (CUT_OFF_MESSAGE, FORMAT_RETRY_MESSAGE, SALVAGE_MESSAGE, STEP_LIMIT_MESSAGE, THINKING_RAN_OUT,
                       build_system_prompt)
 from .safety import ApprovalBroker
 from .session import Session
@@ -39,6 +39,10 @@ INTENT_TOOLS: list[tuple[re.Pattern[str], str, str]] = [
     (re.compile(r"\b(as|in|into|to|make|create|export|save|generate)\b[^?!\n]{0,30}?\.?pdf\b", re.IGNORECASE),
      "create_pdf", "The user asked for a PDF. Call create_pdf now (with `source` or `content`)."),
 ]
+# Output room (tokens, thinking included) per reasoning level. Without thinking: max_output_tokens.
+REASONING_ROOM = {"low": 3072, "medium": 6144, "high": 9216}
+# After thinking used up all the room: hand its reasoning back and ask again, thinking less.
+LIGHTER = {"high": "low", "medium": "low", "low": "low"}
 # "I'll use manage_timetable…", "let me call web_search" — a promise of a tool call.
 PROMISE_RE = re.compile(r"\b(i'll|i will|i'm going to|let me|let's|now i|next,? i)\b", re.IGNORECASE)
 # after_turn(goal, answer, model) → facts learned (shown to the user as a `memory` event)
@@ -106,8 +110,17 @@ class AetherAgent:
 
     @property
     def _options(self) -> dict[str, Any]:
+        return self._options_for(False)
+
+    def _options_for(self, think: bool | str) -> dict[str, Any]:
+        """Thinking counts toward the output cap, so models that reason get more room: the higher
+        the level, the more (but never more than ~60% of the context window)."""
+        cap = self.settings.max_output_tokens
+        if think:
+            room = REASONING_ROOM.get(think if isinstance(think, str) else "medium", REASONING_ROOM["medium"])
+            cap = max(cap, min(room, int(self.settings.context_length * 0.6)))
         return {"num_ctx": self.settings.context_length, "temperature": self.settings.temperature,
-                "num_predict": self.settings.max_output_tokens}
+                "num_predict": cap}
 
     # ------------------------------------------------------------------ loop
     async def run(self, goal: str, session: Session, *, run_id: str | None = None,
@@ -181,6 +194,7 @@ class AetherAgent:
                 yield ev(EventType.STATUS, state=AgentState.THINKING, tools=offered)
             known = self.registry.names
             format_retries = 0
+            thought_chars = 0  # how much it reasoned this run (for an honest message if it never answers)
             nudges = 0
             unresolved: dict[str, str] = {}  # tool → error of a failed call not yet fixed
             used_ok: set[str] = set()        # tools that succeeded this turn
@@ -193,7 +207,7 @@ class AetherAgent:
                 calls: list[dict[str, Any]] = []
                 cut_off = False
                 stream = self.llm.chat_stream(model=model, messages=messages, tools=tools,
-                                              options=self._options, think=think)
+                                              options=self._options_for(think), think=think)
                 # Cloud providers report usage (what you're billed) only at the very end of a stream,
                 # so their streams are never cut short; the early stop is for small local models.
                 cloud = getattr(self.llm, "is_cloud", lambda _m: False)(model)
@@ -219,6 +233,18 @@ class AetherAgent:
                     recovered, cleaned = extract_tool_calls(content, known)
                     if recovered:
                         calls, content = recovered, cleaned
+
+                thought_chars += len(thinking)
+                if not calls and cut_off and not content.strip() and thinking and format_retries < s.max_format_retries:
+                    # It reasoned until the room ran out and never answered. Keep that work: hand the
+                    # reasoning back and ask for the answer now, with lighter reasoning.
+                    format_retries += 1
+                    yield ev(EventType.THOUGHT, kind="retry",
+                             text="It used all its room thinking before answering, so I'm handing its reasoning "
+                                  "back and asking for the answer now.")
+                    messages.append({"role": "user", "content": SALVAGE_MESSAGE.format(reasoning=thinking[-6000:])})
+                    think = LIGHTER.get(think, False) if isinstance(think, str) else False
+                    continue
 
                 if not calls and cut_off and format_retries < s.max_format_retries:
                     # Hit the output cap with nothing usable (often a runaway loop).
@@ -303,7 +329,8 @@ class AetherAgent:
                 answer = strip_thinking("".join(parts))
 
             if not answer:
-                answer = "I couldn't come up with an answer for that. Could you rephrase it?"
+                answer = THINKING_RAN_OUT if thought_chars > 500 else \
+                    "I couldn't come up with an answer for that. Could you rephrase it?"
             stats.wall_s = time.perf_counter() - started
             # `meta` is saved with the conversation (telemetry survives reloads) but never
             # sent back to the model: Session.history() strips it.

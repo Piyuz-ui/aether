@@ -154,3 +154,38 @@ def test_api_skills_and_chat_with_a_skill(settings: Any, tmp_path: Path) -> None
 
 
 _ = json
+
+
+# ------------------------------------------------- thinking needs output room
+@pytest.mark.parametrize("model,level,room", [
+    ("gpt-oss:20b", "high", 9216), ("gpt-oss:20b", "medium", 6144), ("gpt-oss:20b", "low", 3072),
+    ("qwen3:14b", "high", 6144),        # on/off models: "on" gets the medium room
+    ("fake-model", "high", 2048),       # doesn't think: the usual cap
+])
+async def test_reasoning_gets_more_output_room(model: str, level: str, room: int) -> None:
+    llm = Thinker([say("ok")], model)
+    [e async for e in AetherAgent(llm=llm).run("hi", Session(), reasoning=level)]
+    assert llm.requests[0]["options"]["num_predict"] == room
+
+
+async def test_reasoning_that_runs_out_is_handed_back_not_thrown_away() -> None:
+    long_thought = "Use a dict plus a doubly linked list so get and put are O(1). " * 40
+    llm = Thinker([{"thinking": long_thought, "content": "", "done_reason": "length"},
+                   say("Here's an O(1) LRU cache: a dict for lookups and a doubly linked list for order.")],
+                  "gpt-oss:20b")
+    events = [e async for e in AetherAgent(llm=llm).run("write an LRU cache in python", Session(), reasoning="high")]
+    note = next(e for e in events if e.type is EventType.THOUGHT)
+    assert "handing its reasoning back" in note.data["text"]
+    retry = llm.requests[1]
+    assert "<reasoning>" in retry["messages"][-1]["content"] and "doubly linked list" in retry["messages"][-1]["content"]
+    assert retry["think"] == "low" and llm.thinks == ["high", "low"]
+    done = next(e for e in events if e.type is EventType.DONE)
+    assert done.data["answer"].startswith("Here's an O(1) LRU cache")
+
+
+async def test_an_honest_message_when_thinking_never_finishes() -> None:
+    stuck = {"thinking": "Still thinking about edge cases. " * 40, "content": "", "done_reason": "length"}
+    llm = Thinker([stuck, stuck, stuck, say("")], "gpt-oss:20b")
+    events = [e async for e in AetherAgent(llm=llm).run("prove P != NP", Session(), reasoning="high")]
+    answer = next(e for e in events if e.type is EventType.DONE).data["answer"]
+    assert "ran out of room while thinking" in answer and "Reasoning: Med" in answer
