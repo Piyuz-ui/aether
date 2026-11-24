@@ -6,7 +6,9 @@ import { AnimatePresence, motion } from "framer-motion";
 import { Brain, ChartColumn, Library, ListChecks, Settings2, X, type LucideIcon } from "lucide-react";
 import type { ReactNode } from "react";
 
-import { jelly, settle } from "@/lib/motion";
+import { jelly } from "@/lib/motion";
+
+import { SidePanel } from "./SidePanel";
 
 export type DrawerTab = "vault" | "memory" | "tasks" | "usage" | "settings";
 
@@ -26,21 +28,7 @@ export function Drawer({ open, tab, onTab, onClose, children }: {
   children: ReactNode;
 }) {
   return (
-    <AnimatePresence>
-      {open && (
-        <>
-          {/* small screens: dim the chat behind the drawer */}
-          <motion.div className="fixed inset-0 z-30 bg-abyss-950/50 backdrop-blur-[2px] lg:hidden"
-            initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={onClose} />
-          <motion.aside
-            key="drawer"
-            initial={{ x: 60, opacity: 0, scale: 0.97 }}
-            animate={{ x: 0, opacity: 1, scale: 1 }}
-            exit={{ x: 60, opacity: 0, scale: 0.97 }}
-            transition={settle}
-            className="glass fixed inset-y-3 right-3 z-40 flex w-[min(400px,calc(100vw-24px))] flex-col overflow-hidden rounded-[28px] lg:static lg:inset-auto lg:z-auto lg:my-3 lg:mr-3 lg:h-[calc(100dvh-24px)] lg:shrink-0"
-            aria-label="Side panel"
-          >
+    <SidePanel open={open} side="right" width={400} label="Side panel" onClose={onClose} className="flex flex-col">
             <div className="flex items-center gap-1 p-2">
               <nav className="relative flex flex-1 gap-0.5 rounded-2xl bg-abyss-950/35 p-1" role="tablist">
                 {TABS.map((t) => (
@@ -71,9 +59,6 @@ export function Drawer({ open, tab, onTab, onClose, children }: {
                 </motion.div>
               </AnimatePresence>
             </div>
-          </motion.aside>
-        </>
-      )}
-    </AnimatePresence>
+    </SidePanel>
   );
 }

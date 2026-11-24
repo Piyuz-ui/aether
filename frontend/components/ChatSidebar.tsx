@@ -5,17 +5,16 @@
  * (rename ✏️ / let AETHER name it ✨ / delete on each). Docked on wide screens, a slide-over on
  * small ones.
  */
-import clsx from "clsx";
-import { AnimatePresence, motion } from "framer-motion";
+import { AnimatePresence } from "framer-motion";
 import { PanelLeftClose, Plus, Search, X } from "lucide-react";
 import { useMemo, useState } from "react";
 
 import { api } from "@/lib/api";
-import { settle } from "@/lib/motion";
 import type { SessionSummary } from "@/lib/types";
 import { useLive } from "@/lib/useLive";
 
 import { ChatRow } from "./panels/ChatsPanel";
+import { SidePanel } from "./SidePanel";
 import { Empty, ErrorNote } from "./panels/shared";
 
 function group(sessions: SessionSummary[]): { label: string; items: SessionSummary[] }[] {
@@ -99,20 +98,8 @@ export function ChatSidebar({ open, onClose, revision, currentId, onOpen, onNew,
   );
 
   return (
-    <AnimatePresence initial={false}>
-      {open && (
-        <>
-          {/* small screens: dim the chat behind */}
-          <motion.div className="fixed inset-0 z-30 bg-abyss-950/50 backdrop-blur-[2px] lg:hidden"
-            initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={onClose} />
-          <motion.aside key="chats" aria-label="Chats"
-            initial={{ x: -40, opacity: 0 }} animate={{ x: 0, opacity: 1 }} exit={{ x: -40, opacity: 0 }} transition={settle}
-            className={clsx("glass fixed inset-y-3 left-3 z-40 w-[min(290px,calc(100vw-24px))] overflow-hidden rounded-[28px]",
-              "lg:static lg:inset-auto lg:z-auto lg:my-3 lg:ml-3 lg:h-[calc(100dvh-24px)] lg:w-[270px] lg:shrink-0")}>
-            {body}
-          </motion.aside>
-        </>
-      )}
-    </AnimatePresence>
+    <SidePanel open={open} side="left" width={270} sheetWidth={290} label="Chats" onClose={onClose} initial={false}>
+      {body}
+    </SidePanel>
   );
 }
