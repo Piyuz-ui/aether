@@ -14,7 +14,7 @@ import { useLive } from "@/lib/useLive";
 import { Spinner } from "../ui";
 import { ConfirmDelete, Empty, ErrorNote, inputClass, PanelTitle } from "./shared";
 
-function ago(ts: number) {
+export function ago(ts: number) {
   const s = Date.now() / 1000 - ts;
   if (s < 60) return "just now";
   if (s < 3600) return `${Math.floor(s / 60)} min ago`;
@@ -24,7 +24,7 @@ function ago(ts: number) {
 
 const iconBtn = "grid size-7 shrink-0 place-items-center rounded-lg text-mist transition-colors hover:bg-white/[0.08] hover:text-frost";
 
-function ChatRow({ s, current, onOpen, onDeleted, onChanged, toast }: {
+export function ChatRow({ s, current, onOpen, onDeleted, onChanged, toast }: {
   s: SessionSummary;
   current: boolean;
   onOpen: () => void;
@@ -60,7 +60,7 @@ function ChatRow({ s, current, onOpen, onDeleted, onChanged, toast }: {
 
   return (
     <motion.div layout variants={popIn} initial="hidden" animate="show" exit="exit"
-      className={clsx("group flex items-center gap-1.5 rounded-2xl px-2 py-1.5 transition-colors",
+      className={clsx("group relative flex items-center gap-1.5 rounded-2xl px-2 py-1.5 transition-colors",
         current ? "bg-sky/[0.12] ring-1 ring-sky/30" : "hover:bg-white/[0.05]")}>
       {editing ? (
         <form className="flex min-w-0 flex-1 items-center gap-1.5" onSubmit={(e) => { e.preventDefault(); void save(); }}>
@@ -87,7 +87,12 @@ function ChatRow({ s, current, onOpen, onDeleted, onChanged, toast }: {
               </span>
             </span>
           </button>
-          <div className="flex items-center opacity-100 transition-opacity sm:opacity-0 sm:group-focus-within:opacity-100 sm:group-hover:opacity-100">
+          {/* Actions float over the row's right edge on hover (or focus), so titles get the full width.
+              On touch screens (no hover) they stay visible. */}
+          <div className={clsx("flex items-center rounded-xl transition-opacity",
+            "sm:pointer-events-none sm:absolute sm:inset-y-1 sm:right-1 sm:bg-abyss-950/85 sm:pl-1 sm:opacity-0 sm:shadow-[-12px_0_14px_rgba(3,10,25,0.85)] sm:backdrop-blur",
+            "sm:group-focus-within:pointer-events-auto sm:group-focus-within:opacity-100 sm:group-hover:pointer-events-auto sm:group-hover:opacity-100",
+            naming && "sm:pointer-events-auto sm:opacity-100")}>
             <button type="button" className={iconBtn} onClick={() => void autoName()} disabled={naming}
               aria-label="Let AETHER name this chat" title="Let AETHER name it">
               {naming ? <Spinner /> : <Sparkles className="size-3.5" />}
@@ -96,8 +101,8 @@ function ChatRow({ s, current, onOpen, onDeleted, onChanged, toast }: {
               aria-label="Rename this chat" title="Rename">
               <Pencil className="size-3.5" />
             </button>
+            <ConfirmDelete onConfirm={onDeleted} />
           </div>
-          <ConfirmDelete onConfirm={onDeleted} />
         </>
       )}
     </motion.div>

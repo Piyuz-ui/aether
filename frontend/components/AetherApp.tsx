@@ -3,8 +3,7 @@
 import { AnimatePresence, motion, useTransform, type MotionValue } from "framer-motion";
 import clsx from "clsx";
 import {
-  AlertTriangle, BookOpen, Brain, CalendarRange, Calculator, Globe, Library, PanelRight, Plus, RefreshCw,
-  UploadCloud, Waves, Wrench, type LucideIcon,
+  AlertTriangle, BookOpen, Brain, Calculator, CalendarRange, Globe, Library, PanelLeft, PanelRight, Plus, RefreshCw, UploadCloud, Waves, Wrench, type LucideIcon,
 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
@@ -28,10 +27,10 @@ import { Composer, type ComposerHandle } from "./Composer";
 import { Drawer, type DrawerTab } from "./Drawer";
 import { MessageView, spokenText } from "./MessageView";
 import { FeedbackContext } from "./Feedback";
+import { ChatSidebar } from "./ChatSidebar";
 import { ModelSwitcher } from "./ModelSwitcher";
 import { UsagePanel } from "./panels/UsagePanel";
 import { LandingContext, SendGhost, type Flight, type Rect } from "./SendFlight";
-import { ChatsPanel } from "./panels/ChatsPanel";
 import { MemoryPanel } from "./panels/MemoryPanel";
 import { SettingsPanel } from "./panels/SettingsPanel";
 import { TasksPanel } from "./panels/TasksPanel";
@@ -262,6 +261,11 @@ export function AetherApp() {
   return (
     <ArtifactContext.Provider value={setArtifact}>
       <main className="relative z-10 flex h-dvh">
+        <ChatSidebar open={prefs.chatsOpen} onClose={() => setPref("chatsOpen", false)} revision={agent.revision}
+          currentId={agent.sessionId} toast={toast}
+          onOpen={(id) => void agent.loadSession(id)}
+          onNew={() => { agent.newChat(); composer.current?.focus(); if (window.innerWidth < 1024) setPref("chatsOpen", false); }}
+          onDeleted={(id) => id === agent.sessionId && agent.newChat()} />
         <motion.section
           style={{ x: planeX, y: planeY }}
           className="relative flex min-w-0 flex-1 flex-col"
@@ -301,7 +305,12 @@ export function AetherApp() {
           </AnimatePresence>
           {/* header */}
           <header className="relative z-30 px-3 pt-3 sm:px-5">
-            <div className="glass mx-auto flex max-w-4xl items-center gap-3 rounded-[22px] py-2 pl-3 pr-2">
+            <div className="glass mx-auto flex max-w-4xl items-center gap-3 rounded-[22px] py-2 pl-2 pr-2">
+              {!prefs.chatsOpen && (
+                <IconButton label="Show chats" hint="Your conversations" onClick={() => setPref("chatsOpen", true)}>
+                  <PanelLeft className="size-[18px]" />
+                </IconButton>
+              )}
               <AgentOrb state={state} size={34} level={voice.level} />
               <div className="min-w-0 flex-1">
                 <div className="text-[15px] font-semibold tracking-[0.22em] text-frost">AETHER</div>
@@ -316,12 +325,7 @@ export function AetherApp() {
                       {wakeArmed ? "Listening…" : health && !health.ok && state === "idle" ? "Offline" : STATE_LABEL[state]}
                     </motion.span>
                   </AnimatePresence>
-                  {health?.model && <span className="text-mist/70">·</span>}
-                  {health?.model && (
-                    <ModelSwitcher current={health.model} disabled={agent.busy} toast={toast}
-                      onOpenSettings={() => { setTab("settings"); setPref("drawerOpen", true); }}
-                      onSwitched={(m) => { setHealth((h) => (h ? { ...h, model: m, model_note: null } : h)); void loadHealth(); }} />
-                  )}
+
                 </div>
               </div>
               {health?.ok && <AgentStats tools={health.tools} revision={agent.revision} />}
@@ -335,7 +339,7 @@ export function AetherApp() {
                 <Waves className="size-[18px]" />
               </IconButton>
               <IconButton label={prefs.drawerOpen ? "Hide side panel" : "Show side panel"}
-                hint="Vault · Memory · Tasks · Chats · Settings" tooltipAlign="end"
+                hint="Vault · Memory · Tasks · Usage · Settings" tooltipAlign="end"
                 onClick={() => setPref("drawerOpen", !prefs.drawerOpen)}
                 className={prefs.drawerOpen ? "bg-white/[0.07] text-frost" : undefined}>
                 <PanelRight className="size-[18px]" />
@@ -377,7 +381,12 @@ export function AetherApp() {
               <Composer ref={composer} busy={agent.busy} onSend={sendWithFiles} onStop={() => { agent.stop(); voice.stop(); }}
                 autoSendVoice={prefs.autoSendVoice} attachments={files.items} images={files.images}
                 indexing={files.indexing || files.uploading}
-                onAttach={(f) => void files.add(f)} onRemoveAttachment={files.remove} onRemoveImage={files.removeImage} />
+                onAttach={(f) => void files.add(f)} onRemoveAttachment={files.remove} onRemoveImage={files.removeImage}
+                toolbar={health?.model ? (
+                  <ModelSwitcher up current={health.model} disabled={agent.busy} toast={toast}
+                    onOpenSettings={() => { setTab("settings"); setPref("drawerOpen", true); }}
+                    onSwitched={(m) => { setHealth((h) => (h ? { ...h, model: m, model_note: null } : h)); void loadHealth(); }} />
+                ) : undefined} />
               <p className="mt-2 text-center text-[11px] text-mist/75">
                 {runsOn(health?.model)} · risky actions always ask first
               </p>
@@ -389,11 +398,6 @@ export function AetherApp() {
           {tab === "vault" && <VaultPanel revision={agent.revision} toast={toast} />}
           {tab === "memory" && <MemoryPanel revision={agent.revision} />}
           {tab === "tasks" && <TasksPanel revision={agent.revision} />}
-          {tab === "chats" && (
-            <ChatsPanel revision={agent.revision} currentId={agent.sessionId}
-              onOpen={(id) => void agent.loadSession(id)}
-              onDeleted={(id) => id === agent.sessionId && agent.newChat()} toast={toast} />
-          )}
           {tab === "usage" && <UsagePanel revision={agent.revision} />}
           {tab === "settings" && (
             <SettingsPanel health={health} onHealthChange={() => void loadHealth()} revision={agent.revision} toast={toast} />

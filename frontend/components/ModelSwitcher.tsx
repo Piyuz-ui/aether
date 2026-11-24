@@ -27,13 +27,15 @@ function GroupLabel({ icon, children, badge }: { icon: React.ReactNode; children
   );
 }
 
-export function ModelSwitcher({ current, disabled, onSwitched, toast, onOpenSettings }: {
+export function ModelSwitcher({ current, disabled, onSwitched, toast, onOpenSettings, up = false }: {
   current: string | null;
   disabled?: boolean;
   onSwitched: (model: string) => void;
   toast: (title: string, body?: string) => void;
   /** Opens Settings, where cloud keys are added. */
   onOpenSettings?: () => void;
+  /** Open the menu above the button (when it sits at the bottom, in the input box). */
+  up?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const [data, setData] = useState<ModelList | null>(null);
@@ -117,12 +119,13 @@ export function ModelSwitcher({ current, disabled, onSwitched, toast, onOpenSett
         aria-expanded={open}
         aria-label={`Model: ${current ?? "unknown"}${currentCloud ? ` (cloud, ${currentCloud})` : currentHost ? ` (on ${currentHost})` : ""}. Change model`}
         title={disabled ? "Finish the current answer to switch models" : undefined}
-        className="-mx-1 inline-flex items-center gap-1 rounded-lg px-1 py-0.5 font-mono text-[11.5px] text-frost/80 transition-colors hover:bg-white/[0.07] hover:text-frost disabled:pointer-events-none"
+        className={clsx("inline-flex items-center gap-1 rounded-lg font-mono text-[11.5px] text-frost/80 transition-colors hover:bg-white/[0.07] hover:text-frost disabled:pointer-events-none",
+          up ? "h-7 border border-white/[0.07] bg-white/[0.03] px-2" : "-mx-1 px-1 py-0.5")}
       >
         {currentCloud && <Cloud className="size-3 text-periwinkle" aria-hidden />}
         {currentHost && <MonitorSmartphone className="size-3 text-seafoam" aria-hidden />}
         {current ? modelName(current) : "no model"}
-        <motion.span animate={{ rotate: open ? 180 : 0 }} transition={jelly}>
+        <motion.span animate={{ rotate: (open ? 180 : 0) + (up ? 180 : 0) }} transition={jelly}>
           <ChevronDown className="size-3 text-mist" />
         </motion.span>
       </motion.button>
@@ -135,8 +138,8 @@ export function ModelSwitcher({ current, disabled, onSwitched, toast, onOpenSett
             animate={{ opacity: 1, y: 0, scale: 1 }}
             exit={{ opacity: 0, y: -4, scale: 0.97, transition: { duration: 0.12 } }}
             transition={jelly}
-            style={{ transformOrigin: "top left" }}
-            className="glass-pop absolute left-0 top-full z-50 mt-2 w-72 rounded-2xl p-1.5"
+            style={{ transformOrigin: up ? "bottom left" : "top left" }}
+            className={clsx("glass-pop absolute left-0 z-50 w-72 rounded-2xl p-1.5", up ? "bottom-full mb-2" : "top-full mt-2")}
           >
             {data === null && !failed && <div className="flex items-center gap-2 px-2.5 py-2 text-xs text-mist"><Spinner /> Finding models…</div>}
             <div className="soft-scroll max-h-[22rem] overflow-y-auto">

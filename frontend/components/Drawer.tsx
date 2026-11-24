@@ -1,20 +1,19 @@
 "use client";
 
-/** Side glass drawer with spring tabs: Vault · Memory · Tasks · Chats · Usage · Settings. */
+/** Side glass drawer with spring tabs: Vault · Memory · Tasks · Usage · Settings (chats live on the left). */
 import clsx from "clsx";
 import { AnimatePresence, motion } from "framer-motion";
-import { Brain, ChartColumn, Library, ListChecks, MessagesSquare, Settings2, X, type LucideIcon } from "lucide-react";
+import { Brain, ChartColumn, Library, ListChecks, Settings2, X, type LucideIcon } from "lucide-react";
 import type { ReactNode } from "react";
 
 import { jelly, settle } from "@/lib/motion";
 
-export type DrawerTab = "vault" | "memory" | "tasks" | "chats" | "usage" | "settings";
+export type DrawerTab = "vault" | "memory" | "tasks" | "usage" | "settings";
 
 const TABS: { id: DrawerTab; label: string; icon: LucideIcon }[] = [
   { id: "vault", label: "Vault", icon: Library },
   { id: "memory", label: "Memory", icon: Brain },
   { id: "tasks", label: "Tasks", icon: ListChecks },
-  { id: "chats", label: "Chats", icon: MessagesSquare },
   { id: "usage", label: "Usage", icon: ChartColumn },
   { id: "settings", label: "Settings", icon: Settings2 },
 ];

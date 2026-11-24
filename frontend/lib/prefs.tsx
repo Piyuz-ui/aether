@@ -19,6 +19,7 @@ export type Prefs = {
   voice: string; // Kokoro voice preset id
   speed: number; // 0.85 – 1.25
   hideAddresses: boolean; // mask computers' IPs / URLs on screen
+  chatsOpen: boolean; // the chats sidebar on the left
 };
 
 const DEFAULTS: Prefs = {
@@ -31,6 +32,7 @@ const DEFAULTS: Prefs = {
   voice: "af_heart",
   speed: 1,
   hideAddresses: false,
+  chatsOpen: true,
 };
 
 const KEY = "aether.prefs.v1";
@@ -51,7 +53,7 @@ function load(): Prefs {
     const reduce = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
     // On narrow screens the drawer covers the chat, so it starts closed there.
     const wide = window.matchMedia?.("(min-width: 1024px)").matches ?? true;
-    return { ...DEFAULTS, calm: reduce, drawerOpen: wide, ...stored };
+    return { ...DEFAULTS, calm: reduce, drawerOpen: wide, chatsOpen: wide, ...stored };
   } catch {
     return DEFAULTS;
   }

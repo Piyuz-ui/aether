@@ -16,9 +16,8 @@ import { useLive } from "@/lib/useLive";
 import { speechSupported } from "@/lib/voice";
 
 import { Chip, JiggleButton, Toggle } from "../ui";
-import { HardwareSection } from "./HardwareSection";
-import { HostsSection } from "./HostsSection";
 import { McpSection } from "./McpSection";
+import { NetworkGroup } from "./NetworkGroup";
 import { ErrorNote, inputClass, PanelTitle } from "./shared";
 
 const ENGINE_LABEL: Record<string, string> = {
@@ -268,10 +267,6 @@ export function SettingsPanel({ health, onHealthChange, revision, toast }: {
         </div>
       </section>
 
-      <HardwareSection revision={revision} />
-
-      <HostsSection revision={revision} toast={toast} onChanged={() => { void models.reload(); onHealthChange(); }} />
-
       <CloudSection revision={revision} toast={toast} onChanged={() => { void models.reload(); onHealthChange(); }} />
 
       <McpSection revision={revision} toast={toast} />
@@ -315,6 +310,8 @@ export function SettingsPanel({ health, onHealthChange, revision, toast }: {
           <CalendarDays className="size-4" /> Export deadlines to your calendar (.ics)
         </a>
       </section>
+
+      <NetworkGroup revision={revision} toast={toast} onChanged={() => { void models.reload(); onHealthChange(); }} />
     </div>
   );
 }

@@ -4,7 +4,7 @@
 import clsx from "clsx";
 import { AnimatePresence, motion, useAnimate } from "framer-motion";
 import { ArrowUp, FileText, Mic, Paperclip, Square, X } from "lucide-react";
-import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from "react";
+import { forwardRef, useEffect, useImperativeHandle, useRef, useState, type ReactNode } from "react";
 
 import { jelly } from "@/lib/motion";
 import { usePrefs } from "@/lib/prefs";
@@ -26,7 +26,9 @@ export const Composer = forwardRef<ComposerHandle, {
   onAttach: (files: File[]) => void;
   onRemoveAttachment: (id: number) => void;
   onRemoveImage: (id: string) => void;
-}>(function Composer({ busy, onSend, onStop, autoSendVoice, attachments, images, indexing, onAttach, onRemoveAttachment, onRemoveImage }, ref) {
+  /** Shown under the text, inside the box (the model picker). */
+  toolbar?: ReactNode;
+}>(function Composer({ busy, onSend, onStop, autoSendVoice, attachments, images, indexing, onAttach, onRemoveAttachment, onRemoveImage, toolbar }, ref) {
   const [text, setText] = useState("");
   const area = useRef<HTMLTextAreaElement>(null);
   const { prefs } = usePrefs();
@@ -205,6 +207,7 @@ export const Composer = forwardRef<ComposerHandle, {
           )}
         </AnimatePresence>
       </div>
+      {toolbar && <div className="flex items-center gap-2 px-1.5 pb-0.5 pt-1">{toolbar}</div>}
       {voice.error && <div className="px-3 pb-1 pt-1.5 text-xs text-coral">{voice.error}</div>}
     </motion.div>
   );
